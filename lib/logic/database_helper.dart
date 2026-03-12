@@ -1,10 +1,14 @@
+/// database_helper.dart
+/// v4: pending_requests diperluas dengan kolom nama, nominal, quantity, datetime
+library;
+
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:flutter/material.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
-
   DatabaseHelper._init();
 
   Future<Database> get database async {
@@ -16,34 +20,120 @@ class DatabaseHelper {
   Future<Database> _initDB(String filePath) async {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
-
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path,
+      version: 4,
+      onCreate: _createDB,
+      onUpgrade: _upgradeDB,
+    );
   }
 
   Future _createDB(Database db, int version) async {
     await db.execute('''
       CREATE TABLE transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        amount INTEGER NOT NULL,
-        note TEXT NOT NULL,
-        type TEXT NOT NULL,
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        amount   INTEGER NOT NULL,
+        note     TEXT NOT NULL,
+        type     TEXT NOT NULL,
         category TEXT NOT NULL,
-        date TEXT NOT NULL
+        date     TEXT NOT NULL
       )
     ''');
 
     await db.execute('''
       CREATE TABLE messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text TEXT NOT NULL,
-        isAi INTEGER NOT NULL,
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        text       TEXT NOT NULL,
+        isAi       INTEGER NOT NULL,
         confirmMsg TEXT,
         confirmCmd TEXT
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE pending_requests (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        original_input TEXT    NOT NULL,
+        -- 2 data WAJIB dari user
+        nama           TEXT,
+        nominal        INTEGER,
+        -- 2 data OPSIONAL (default jika tidak ada)
+        quantity       INTEGER NOT NULL DEFAULT 1,
+        input_datetime TEXT    NOT NULL,
+        -- data auto dari AI/sistem
+        missing_fields TEXT    NOT NULL DEFAULT '[]',
+        partial_data   TEXT    NOT NULL DEFAULT '{}',
+        ai_question    TEXT    NOT NULL DEFAULT '',
+        reason         TEXT    NOT NULL DEFAULT '',
+        category       TEXT    NOT NULL DEFAULT 'Other',
+        type           TEXT    NOT NULL DEFAULT 'OUT',
+        -- status & waktu
+        created_at     TEXT    NOT NULL,
+        status         TEXT    NOT NULL DEFAULT 'pending',
+        follow_up_shown INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
   }
 
-  // CREATE
+  Future _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS pending_requests (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          original_input TEXT    NOT NULL,
+          nama           TEXT,
+          nominal        INTEGER,
+          quantity       INTEGER NOT NULL DEFAULT 1,
+          input_datetime TEXT    NOT NULL,
+          missing_fields TEXT    NOT NULL DEFAULT '[]',
+          partial_data   TEXT    NOT NULL DEFAULT '{}',
+          ai_question    TEXT    NOT NULL DEFAULT '',
+          reason         TEXT    NOT NULL DEFAULT '',
+          category       TEXT    NOT NULL DEFAULT 'Other',
+          type           TEXT    NOT NULL DEFAULT 'OUT',
+          created_at     TEXT    NOT NULL,
+          status         TEXT    NOT NULL DEFAULT 'pending',
+          follow_up_shown INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      debugPrint("DB_UPGRADE v2");
+    }
+    if (oldVersion < 3) {
+      try {
+        await db.execute(
+          "ALTER TABLE pending_requests ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
+        );
+      } catch (_) {}
+      debugPrint("DB_UPGRADE v3");
+    }
+    if (oldVersion < 4) {
+      // Tambah kolom baru ke tabel pending_requests yang sudah ada
+      final cols = [
+        "ALTER TABLE pending_requests ADD COLUMN nama TEXT",
+        "ALTER TABLE pending_requests ADD COLUMN nominal INTEGER",
+        "ALTER TABLE pending_requests ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE pending_requests ADD COLUMN input_datetime TEXT",
+        "ALTER TABLE pending_requests ADD COLUMN category TEXT NOT NULL DEFAULT 'Other'",
+        "ALTER TABLE pending_requests ADD COLUMN type TEXT NOT NULL DEFAULT 'OUT'",
+        "ALTER TABLE pending_requests ADD COLUMN follow_up_shown INTEGER NOT NULL DEFAULT 0",
+      ];
+      for (final sql in cols) {
+        try {
+          await db.execute(sql);
+        } catch (_) {}
+      }
+      // Isi input_datetime untuk data lama
+      await db.execute(
+        "UPDATE pending_requests SET input_datetime = created_at WHERE input_datetime IS NULL",
+      );
+      debugPrint("DB_UPGRADE v4: pending_requests diperluas");
+    }
+  }
+
+  // ==========================================
+  // TRANSACTIONS
+  // ==========================================
+
   Future<int> addTransaction(
     int amount,
     String note,
@@ -56,28 +146,26 @@ class DatabaseHelper {
       'note': note,
       'type': type.toUpperCase().trim(),
       'category': category,
-      'date': DateTime.now().toIso8601String(), // Simpan ISO String lengkap
+      'date': DateTime.now().toIso8601String(),
     });
-    print(
-      "DB_LOG: Berhasil simpan ke SQL dengan ID: $id | Amount: $amount | Type: $type",
-    );
+    debugPrint("DB_TX: ID=$id | $note | Rp$amount | $type");
     return id;
   }
 
-  // READ
   Future<List<Map<String, dynamic>>> getAllTransactions() async {
     final db = await instance.database;
-    // Urutkan berdasarkan tanggal terbaru
     return await db.query('transactions', orderBy: 'date DESC');
   }
 
-  // DELETE
   Future<int> deleteTransaction(int id) async {
     final db = await instance.database;
     return await db.delete('transactions', where: 'id = ?', whereArgs: [id]);
   }
 
+  // ==========================================
   // MESSAGES
+  // ==========================================
+
   Future<int> insertMessage(
     String text,
     bool isAi, {
@@ -93,19 +181,68 @@ class DatabaseHelper {
     });
   }
 
-  Future<List<Map<String, dynamic>>> getMessages({int limit = 50}) async {
+  Future<List<Map<String, dynamic>>> getMessages({int limit = 30}) async {
     final db = await instance.database;
     return await db.query('messages', orderBy: 'id DESC', limit: limit);
   }
+
+  // ==========================================
+  // RAW SELECT
+  // ==========================================
+
+  Future<RawQueryResult> rawSelect(String validatedSql) async {
+    final db = await instance.database;
+    try {
+      final rows = await db.rawQuery(validatedSql);
+      final columns = rows.isNotEmpty ? rows.first.keys.toList() : <String>[];
+      return RawQueryResult(
+        columns: columns.cast<String>(),
+        rows: rows,
+        error: null,
+      );
+    } catch (e) {
+      return RawQueryResult(columns: [], rows: [], error: e.toString());
+    }
+  }
+
+  // ==========================================
+  // CLEAR ALL
+  // ==========================================
 
   Future<void> clearAllData() async {
     final db = await instance.database;
     await db.delete('transactions');
     await db.delete('messages');
+    await db.delete('pending_requests');
   }
+}
 
-  Future<void> close() async {
-    final db = await _database;
-    if (db != null) await db.close();
+// ==========================================
+// MODEL: RawQueryResult
+// ==========================================
+
+class RawQueryResult {
+  final List<String> columns;
+  final List<Map<String, dynamic>> rows;
+  final String? error;
+
+  RawQueryResult({
+    required this.columns,
+    required this.rows,
+    required this.error,
+  });
+
+  bool get isSuccess => error == null;
+  bool get isEmpty => rows.isEmpty;
+  int get rowCount => rows.length;
+
+  bool get isEffectivelyEmpty {
+    if (rows.isEmpty) return true;
+    for (final row in rows) {
+      for (final val in row.values) {
+        if (val != null && val != 0 && val != '0') return false;
+      }
+    }
+    return true;
   }
 }
