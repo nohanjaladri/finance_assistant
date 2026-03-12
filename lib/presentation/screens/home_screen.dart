@@ -35,16 +35,34 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // SNACKBAR ERROR HELPER
+  void _showErrorSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: const TextStyle(color: Colors.white)),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   void _onFinanceChanged() {
     final finance = context.read<FinanceProvider>();
-    if (finance.pendingToFollowUp != null) {
-      _injectFollowUpBubble(finance.pendingToFollowUp!);
+    final pending = finance.pendingToFollowUp;
+
+    if (pending != null) {
       finance.consumeFollowUp();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _injectFollowUpBubble(pending);
+      });
     }
   }
 
   void _injectFollowUpBubble(PendingRequest pending) {
+    if (!mounted) return;
     if (!isChatExpanded) setState(() => isChatExpanded = true);
+
     final finance = context.read<FinanceProvider>();
     finance.setWaitingDirectReply(true);
     finance.addMessage(pending.aiQuestion, true);
@@ -122,22 +140,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return false;
   }
 
-  Future<void> _maybeShowFollowUp(FinanceProvider finance) async {
-    final count = await PendingRequestHelper.instance.countPending();
-    if (count == 0) return;
-
-    final all = await finance.getAllPending();
-    final summaries = all
-        .take(3)
-        .map((p) => '• ${p.nama ?? p.originalInput}')
-        .join('\n');
-    final more = all.length > 3 ? '\n...dan ${all.length - 3} lainnya' : '';
-
-    final followUpMsg =
-        'Ada $count data transaksi yang belum lengkap, mau dilengkapi sekarang?\n\n$summaries$more';
-    finance.setPendingFollowUpQuestion(followUpMsg, all);
-  }
-
   Future<String> _buildPendingContext(FinanceProvider finance) async {
     if (finance.activeResolvingPending == null) {
       return "";
@@ -154,12 +156,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _processMessage(String userText) async {
     if (userText.trim().isEmpty) return;
+    debugPrint("[HomeScreen] _processMessage: Memproses teks -> $userText");
 
     final apiKey = _getApiKey();
     if (apiKey.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("API Key tidak ditemukan.")));
+      _showErrorSnackBar("API Key Groq tidak ditemukan di file .env");
       return;
     }
 
@@ -167,34 +168,45 @@ class _HomeScreenState extends State<HomeScreen> {
     final voice = context.read<VoiceService>();
     final aiService = AiService(apiKey: apiKey);
 
-    if (finance.isWaitingFollowUpConfirm) {
-      await _handleFollowUpConfirm(userText, finance, voice, apiKey);
-      return;
-    }
-
-    final userAmount = AmountParser.parseAmount(userText);
+    final userAmountFallback = AmountParser.parseAmount(userText);
     final wasWaitingDirectReply = finance.isWaitingDirectReply;
     final activePendingSnapshot = finance.activeResolvingPending;
 
     voice.stop();
-    finance.consumeDirectReply();
-    await finance.addMessage(userText, false);
+
+    bool isDirectlyResolving = false;
+    if (wasWaitingDirectReply &&
+        activePendingSnapshot != null &&
+        _isDirectReplyOnly(userText, activePendingSnapshot)) {
+      isDirectlyResolving = true;
+    } else {
+      finance.consumeDirectReply();
+      finance.setActiveResolvingPending(null);
+    }
+
+    try {
+      await finance.addMessage(userText, false);
+    } catch (e) {
+      _showErrorSnackBar("Gagal menyimpan pesan ke database.");
+      return;
+    }
+
     finance.setAiThinking(true);
     _scrollToBottom();
 
     try {
       final pendingContext = await _buildPendingContext(finance);
 
-      if (wasWaitingDirectReply &&
-          userAmount != null &&
-          activePendingSnapshot != null &&
-          _isDirectReplyOnly(userText, activePendingSnapshot)) {
+      if (isDirectlyResolving &&
+          userAmountFallback != null &&
+          activePendingSnapshot != null) {
+        debugPrint("[HomeScreen] _processMessage: Mode Direct Resolve Aktif");
         await _executeResolvePending(
           userText: userText,
           aiService: aiService,
           finance: finance,
           voice: voice,
-          resolvedAmount: userAmount,
+          resolvedAmount: userAmountFallback,
           targetPending: activePendingSnapshot,
           pendingContext: pendingContext,
         );
@@ -205,7 +217,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final messages = [
         {"role": "system", "content": systemPrompt},
         ...finance.chatHistory
-            .where((m) => m['queryResult'] == null && m['isFollowUp'] != true)
+            .where((m) => m['queryResult'] == null)
             .takeLast(8)
             .map(
               (m) => {
@@ -216,12 +228,18 @@ class _HomeScreenState extends State<HomeScreen> {
         {"role": "user", "content": userText},
       ];
 
+      debugPrint(
+        "[HomeScreen] _processMessage: Mengirim request ke API Groq...",
+      );
       final agentResponse = await aiService.sendAgentMessage(messages);
       final choice = agentResponse.data['choices'][0];
       final message = choice['message'];
       final toolCalls = message['tool_calls'] as List<dynamic>?;
 
       if (toolCalls != null && toolCalls.isNotEmpty) {
+        debugPrint(
+          "[HomeScreen] _processMessage: Ditemukan ${toolCalls.length} panggilan tool.",
+        );
         await _executeToolCalls(
           toolCalls: toolCalls,
           agentMessage: message,
@@ -230,59 +248,24 @@ class _HomeScreenState extends State<HomeScreen> {
           finance: finance,
           voice: voice,
           pendingContext: pendingContext,
-          userAmount: userAmount,
         );
       } else {
+        debugPrint("[HomeScreen] _processMessage: Respon berupa teks biasa.");
         final content = message['content'] as String? ?? "";
         await finance.addMessage(content, true);
         if (isChatExpanded) voice.speak(content);
-        await _maybeShowFollowUp(finance);
       }
     } catch (e) {
-      debugPrint("AGENT_ERROR: $e");
-      await finance.addMessage("Maaf, ada gangguan koneksi.", true);
+      debugPrint("[HomeScreen] AGENT_ERROR: $e");
+      _showErrorSnackBar("Maaf, ada gangguan koneksi ke AI.");
+      await finance.addMessage(
+        "Maaf, gagal memproses data karena gangguan koneksi.",
+        true,
+      );
     } finally {
       finance.setAiThinking(false);
       _scrollToBottom();
     }
-  }
-
-  Future<void> _handleFollowUpConfirm(
-    String userText,
-    FinanceProvider finance,
-    VoiceService voice,
-    String apiKey,
-  ) async {
-    final lower = userText.toLowerCase().trim();
-    final isYes = RegExp(
-      r'^(ya|iya|yep|ok|oke|yoi|mau|lanjut|boleh|silakan)',
-    ).hasMatch(lower);
-
-    finance.setWaitingFollowUpConfirm(false);
-    await finance.addMessage(userText, false);
-
-    if (isYes) {
-      final oldest = await finance.getOldestPending();
-      if (oldest != null) {
-        finance.setActiveResolvingPending(oldest);
-        finance.setWaitingDirectReply(true);
-
-        final buf = StringBuffer();
-        buf.writeln('Oke, lengkapi data ini:\n');
-        buf.writeln('📋 *${oldest.nama ?? oldest.originalInput}*');
-        if (oldest.nama != null) buf.writeln('   Nama: ${oldest.nama}');
-        if (oldest.nominal != null)
-          buf.writeln('   Harga: Rp ${_formatRupiah(oldest.nominal!)}');
-        buf.writeln('   Jumlah: ${oldest.quantity}x');
-        buf.writeln('\n${oldest.aiQuestion}');
-
-        await finance.addMessage(buf.toString(), true);
-        if (isChatExpanded) voice.speak(oldest.aiQuestion);
-      }
-    } else {
-      await finance.addMessage('Oke, nanti saya ingatkan lagi ya! 😊', true);
-    }
-    _scrollToBottom();
   }
 
   Future<void> _executeToolCalls({
@@ -293,7 +276,6 @@ class _HomeScreenState extends State<HomeScreen> {
     required FinanceProvider finance,
     required VoiceService voice,
     required String pendingContext,
-    required int? userAmount,
   }) async {
     final toolResults = <Map<String, dynamic>>[];
     bool anyRecordSuccess = false;
@@ -307,24 +289,47 @@ class _HomeScreenState extends State<HomeScreen> {
         args =
             jsonDecode(raw is String ? raw : jsonEncode(raw))
                 as Map<String, dynamic>;
+        debugPrint(
+          "[HomeScreen] _executeToolCalls: Mengeksekusi $toolName dengan argumen $args",
+        );
       } catch (e) {
-        debugPrint("TOOL_ARG_PARSE_ERROR: $e");
+        debugPrint("[HomeScreen] TOOL_ARG_PARSE_ERROR: $e");
+        _showErrorSnackBar("Format argumen dari AI tidak valid.");
       }
 
       String result = "";
       if (toolName == "record_transaction") {
-        final finalAmount = userAmount ?? 0;
+        int finalAmount = 0;
+        if (args['amount'] != null) {
+          // PENGAMAN (BACKUP PARSER): Membersihkan karakter non-angka (seperti Rp, titik, atau koma)
+          String rawAmount = args['amount'].toString();
+          String cleanedAmount = AmountParser.cleanNumberString(rawAmount);
+          finalAmount = int.tryParse(cleanedAmount) ?? 0;
+          debugPrint(
+            "[HomeScreen] record_transaction: Ekstraksi angka (Raw: $rawAmount -> Cleaned: $cleanedAmount -> Final: $finalAmount)",
+          );
+        }
+
         if (finalAmount <= 0) {
-          result = "error: tidak ada nominal di input user";
+          result = "error: amount tidak valid atau tidak disebutkan";
+          debugPrint(
+            "[HomeScreen] record_transaction: Gagal karena finalAmount <= 0",
+          );
         } else {
           final note = args['note'] as String? ?? "Transaksi";
           final type = (args['type'] as String? ?? 'OUT').toUpperCase();
           final category = args['category'] as String? ?? 'Other';
-          await finance.addTransaction(finalAmount, note, type, category);
-          if (finance.activeResolvingPending != null)
-            await finance.completePending(finance.activeResolvingPending!.id);
-          result = "success: $note Rp $finalAmount $type $category";
-          anyRecordSuccess = true;
+
+          try {
+            await finance.addTransaction(finalAmount, note, type, category);
+            if (finance.activeResolvingPending != null)
+              await finance.completePending(finance.activeResolvingPending!.id);
+            result = "success: $note Rp $finalAmount $type $category";
+            anyRecordSuccess = true;
+          } catch (e) {
+            result = "error_database: gagal menyimpan ke lokal";
+            _showErrorSnackBar("Gagal menyimpan transaksi ke database.");
+          }
         }
       } else if (toolName == "save_pending") {
         final originalInput = args['original_input'] as String? ?? "";
@@ -333,38 +338,74 @@ class _HomeScreenState extends State<HomeScreen> {
             .replaceAll('UNKNOWN', 'OUT')
             .toUpperCase();
         final partialCategory = args['partial_category'] as String? ?? 'Other';
-        final question =
-            args['question'] as String? ?? 'Bisa lengkapi informasinya?';
         final reason = args['reason'] as String? ?? 'Data tidak lengkap';
+
+        int? aiAmount;
+        if (args['amount'] != null) {
+          String rawAmount = args['amount'].toString();
+          String cleanedAmount = AmountParser.cleanNumberString(rawAmount);
+          aiAmount = int.tryParse(cleanedAmount);
+        }
 
         final nama = (partialNote != originalInput && partialNote.isNotEmpty)
             ? partialNote
             : null;
-        final nominal = userAmount;
         final missing = <String>[];
         if (nama == null) missing.add('nama');
-        if (nominal == null) missing.add('nominal');
+        if (aiAmount == null) missing.add('nominal');
 
-        await finance.savePendingRequestNew(
-          originalInput: originalInput,
-          nama: nama,
-          nominal: nominal,
-          aiQuestion: question,
-          reason: reason,
-          category: partialCategory,
-          type: partialType,
-          missingFields: missing,
-          partialData: {
-            'note': partialNote,
-            'type': partialType,
-            'category': partialCategory,
-          },
-        );
+        try {
+          await finance.savePendingRequestNew(
+            originalInput: originalInput,
+            nama: nama,
+            nominal: aiAmount,
+            aiQuestion:
+                "Informasi belum lengkap. Tolong sebutkan nama dan nominalnya.",
+            reason: reason,
+            category: partialCategory,
+            type: partialType,
+            missingFields: missing,
+            partialData: {
+              'note': partialNote,
+              'type': partialType,
+              'category': partialCategory,
+            },
+          );
+          result =
+              "saved_silently: Data berhasil dimasukkan ke antrean pending.";
+        } catch (e) {
+          result = "error_database: gagal save pending";
+          _showErrorSnackBar("Gagal menyimpan ke antrean pending.");
+        }
+      } else if (toolName == "update_transaction") {
+        final id = int.tryParse(args['id'].toString()) ?? -1;
 
-        final oldest = await finance.getOldestPending();
-        if (oldest != null) finance.setActiveResolvingPending(oldest);
-        finance.setWaitingDirectReply(true);
-        result = "saved: $question";
+        int newAmount = 0;
+        if (args['new_amount'] != null) {
+          String rawAmount = args['new_amount'].toString();
+          String cleanedAmount = AmountParser.cleanNumberString(rawAmount);
+          newAmount = int.tryParse(cleanedAmount) ?? 0;
+        }
+
+        final newNote = args['new_note'] as String?;
+
+        if (id != -1 && newAmount > 0) {
+          try {
+            await DatabaseHelper.instance.updateTransaction(
+              id,
+              newAmount,
+              newNote,
+            );
+            await finance.refreshData();
+            result =
+                "success_update: Transaksi ID $id berhasil diperbarui menjadi Rp $newAmount.";
+          } catch (e) {
+            result = "error_database: Gagal memperbarui transaksi";
+            _showErrorSnackBar("Gagal memperbarui transaksi di database.");
+          }
+        } else {
+          result = "error: ID tidak ditemukan atau amount tidak valid.";
+        }
       } else if (toolName == "query_database") {
         result = "query_pending";
       } else if (toolName == "ask_clarification") {
@@ -377,6 +418,20 @@ class _HomeScreenState extends State<HomeScreen> {
         "result": result,
         "args": args,
       });
+    }
+
+    final hasPending = toolResults.any((r) => r['tool_name'] == 'save_pending');
+    if (hasPending) {
+      final msg = anyRecordSuccess
+          ? "Sebagian dicatat, sisanya masuk antrean pending ✓"
+          : "Dicatat di antrean pending ✓";
+      await finance.addMessage(msg, true);
+
+      if (isChatExpanded)
+        voice.speak(
+          anyRecordSuccess ? "Masuk pending sebagian" : "Masuk pending",
+        );
+      return;
     }
 
     final queryTool = toolResults
@@ -394,6 +449,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final validation = QueryValidator.validate(sql);
       if (!validation.isValid) {
+        _showErrorSnackBar(
+          "Query diblokir: Sistem mendeteksi query yang berpotensi merusak data.",
+        );
         await finance.addMessage(
           "Query tidak valid: ${validation.errorMessage}",
           true,
@@ -401,19 +459,20 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      final queryResult = await finance.executeQuery(
-        validation.sanitizedQuery!,
-      );
-      if (!queryResult.isSuccess) {
-        await finance.addMessage("Gagal mengambil data.", true);
-        return;
-      }
-
-      final resultContent = queryResult.isEffectivelyEmpty
-          ? "Tidak ada data ditemukan"
-          : "Ditemukan ${queryResult.rowCount} baris:\n${queryResult.rows.take(10).map((r) => r.toString()).join('\n')}";
-
       try {
+        final queryResult = await finance.executeQuery(
+          validation.sanitizedQuery!,
+        );
+        if (!queryResult.isSuccess) {
+          _showErrorSnackBar("Gagal mengeksekusi pencarian data di database.");
+          await finance.addMessage("Gagal mengambil data.", true);
+          return;
+        }
+
+        final resultContent = queryResult.isEffectivelyEmpty
+            ? "Tidak ada data ditemukan"
+            : "Ditemukan ${queryResult.rowCount} baris:\n${queryResult.rows.take(10).map((r) => r.toString()).join('\n')}";
+
         final sysPrompt = aiService.buildSystemPrompt(pendingContext);
         final aiSummary = await aiService.summarizeQuery(
           sysPrompt,
@@ -422,6 +481,7 @@ class _HomeScreenState extends State<HomeScreen> {
           queryTool['tool_call_id'] as String,
           resultContent,
         );
+
         if (queryResult.isEffectivelyEmpty) {
           await finance.addMessage(aiSummary, true);
         } else {
@@ -433,13 +493,9 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         }
         if (isChatExpanded) voice.speak(aiSummary);
-      } catch (_) {
-        await finance.addMessage(
-          queryResult.isEffectivelyEmpty
-              ? "Belum ada data."
-              : "Ada ${queryResult.rowCount} data.",
-          true,
-        );
+      } catch (e) {
+        debugPrint("[HomeScreen] _executeToolCalls: Error saat query -> $e");
+        await finance.addMessage("Terjadi kesalahan saat mencari data.", true);
       }
       return;
     }
@@ -458,7 +514,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      final newPendingCtx = await _buildPendingContext(finance);
       final toolResultMessages = toolResults
           .map(
             (r) => {
@@ -468,7 +523,7 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           )
           .toList();
-      final sysPrompt = aiService.buildSystemPrompt(newPendingCtx);
+      final sysPrompt = aiService.buildSystemPrompt(pendingContext);
       final confirmation = await aiService.generateConfirmation(
         sysPrompt,
         userText,
@@ -478,25 +533,10 @@ class _HomeScreenState extends State<HomeScreen> {
       await finance.addMessage(confirmation, true);
       if (isChatExpanded) voice.speak(confirmation);
     } catch (e) {
-      final hasPending = toolResults.any(
-        (r) => r['tool_name'] == 'save_pending',
+      debugPrint(
+        "[HomeScreen] _executeToolCalls: Konfirmasi AI gagal, mencetak konfirmasi lokal.",
       );
-      if (hasPending) {
-        final q =
-            (toolResults.firstWhere(
-                      (r) => r['tool_name'] == 'save_pending',
-                    )['result']
-                    as String)
-                .replaceFirst("saved: ", "");
-        await finance.addMessage(q, true);
-      } else {
-        await finance.addMessage("Dicatat! ✓", true);
-      }
-    }
-
-    if (anyRecordSuccess) {
-      await Future.delayed(const Duration(milliseconds: 500));
-      await _maybeShowFollowUp(finance);
+      await finance.addMessage("Proses Selesai! ✓", true);
     }
   }
 
@@ -514,38 +554,28 @@ class _HomeScreenState extends State<HomeScreen> {
         : targetPending.type;
     final nama = targetPending.nama ?? targetPending.originalInput;
 
-    await finance.addTransaction(
-      resolvedAmount,
-      nama,
-      type,
-      targetPending.category,
-    );
-    await finance.completePending(targetPending.id);
-
-    final newCtx = await _buildPendingContext(finance);
     try {
-      final sysPrompt = aiService.buildSystemPrompt(newCtx);
+      await finance.addTransaction(
+        resolvedAmount,
+        nama,
+        type,
+        targetPending.category,
+      );
+      await finance.completePending(targetPending.id);
+
+      final sysPrompt = aiService.buildSystemPrompt("");
       final aiRes = await aiService.confirmDirectResolve(
         sysPrompt,
         nama,
         resolvedAmount,
       );
-
-      if (newCtx.isNotEmpty) {
-        final next = await finance.getOldestPending();
-        if (next != null) {
-          finance.setActiveResolvingPending(next);
-          finance.setWaitingDirectReply(true);
-        }
-      }
       await finance.addMessage(aiRes, true);
       if (isChatExpanded) voice.speak(aiRes);
-    } catch (_) {
+    } catch (e) {
+      debugPrint("[HomeScreen] ERROR _executeResolvePending: $e");
+      _showErrorSnackBar("Gagal memproses resolusi pending.");
       await finance.addMessage("Dicatat! ✓", true);
     }
-
-    await Future.delayed(const Duration(milliseconds: 500));
-    await _maybeShowFollowUp(finance);
   }
 
   String _formatRupiah(int amount) {
@@ -812,10 +842,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   );
                 }
 
-                if (isAi && m['isFollowUp'] == true) {
-                  return _buildFollowUpBubble(m['text'] as String, finance);
-                }
-
                 return Align(
                   alignment: isAi
                       ? Alignment.centerLeft
@@ -845,70 +871,6 @@ class _HomeScreenState extends State<HomeScreen> {
             const LinearProgressIndicator(color: Colors.deepPurple),
           _buildInputArea(finance),
         ],
-      ),
-    );
-  }
-
-  Widget _buildFollowUpBubble(String message, FinanceProvider finance) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.85,
-        ),
-        decoration: BoxDecoration(
-          color: Colors.deepPurple[50],
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: Colors.deepPurple.shade200),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-              child: Text(message, style: const TextStyle(fontSize: 13)),
-            ),
-            const Divider(height: 1),
-            Row(
-              children: [
-                Expanded(
-                  child: TextButton(
-                    onPressed: finance.isWaitingFollowUpConfirm
-                        ? () => _handleFollowUpConfirm(
-                            "ya",
-                            finance,
-                            context.read<VoiceService>(),
-                            _getApiKey(),
-                          )
-                        : null,
-                    child: const Text(
-                      "Ya, lengkapi",
-                      style: TextStyle(color: Colors.deepPurple),
-                    ),
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: TextButton(
-                    onPressed: finance.isWaitingFollowUpConfirm
-                        ? () => _handleFollowUpConfirm(
-                            "tidak",
-                            finance,
-                            context.read<VoiceService>(),
-                            _getApiKey(),
-                          )
-                        : null,
-                    child: Text(
-                      "Nanti saja",
-                      style: TextStyle(color: Colors.grey[600]),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }

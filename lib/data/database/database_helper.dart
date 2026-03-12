@@ -88,7 +88,6 @@ class DatabaseHelper {
           follow_up_shown INTEGER NOT NULL DEFAULT 0
         )
       ''');
-      debugPrint("DB_UPGRADE v2");
     }
     if (oldVersion < 3) {
       try {
@@ -96,7 +95,6 @@ class DatabaseHelper {
           "ALTER TABLE pending_requests ADD COLUMN reason TEXT NOT NULL DEFAULT ''",
         );
       } catch (_) {}
-      debugPrint("DB_UPGRADE v3");
     }
     if (oldVersion < 4) {
       final cols = [
@@ -116,7 +114,6 @@ class DatabaseHelper {
       await db.execute(
         "UPDATE pending_requests SET input_datetime = created_at WHERE input_datetime IS NULL",
       );
-      debugPrint("DB_UPGRADE v4: pending_requests diperluas");
     }
   }
 
@@ -134,9 +131,23 @@ class DatabaseHelper {
       'category': category,
       'date': DateTime.now().toIso8601String(),
     });
-    debugPrint("DB_TX: ID=$id | $note | Rp$amount | $type");
     return id;
   }
+
+  // --- FUNGSI BARU UNTUK UPDATE TRANSAKSI ---
+  Future<int> updateTransaction(int id, int amount, String? note) async {
+    final db = await instance.database;
+    final Map<String, dynamic> data = {'amount': amount};
+    if (note != null && note.isNotEmpty) data['note'] = note;
+
+    return await db.update(
+      'transactions',
+      data,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+  // ------------------------------------------
 
   Future<List<Map<String, dynamic>>> getAllTransactions() async {
     final db = await instance.database;

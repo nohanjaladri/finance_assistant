@@ -15,31 +15,46 @@ class FinanceProvider extends ChangeNotifier {
   PendingRequest? pendingToFollowUp;
 
   Future<void> _syncPendingCount() async {
-    pendingCount = await PendingRequestHelper.instance.countPending();
+    try {
+      pendingCount = await PendingRequestHelper.instance.countPending();
+      debugPrint(
+        "[FinanceProvider] _syncPendingCount: Sukses (Count: $pendingCount)",
+      );
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di _syncPendingCount: $e");
+    }
   }
 
   Future<void> refreshData() async {
-    final txs = await DatabaseHelper.instance.getAllTransactions();
-    final msgs = await DatabaseHelper.instance.getMessages(limit: 30);
+    try {
+      debugPrint("[FinanceProvider] refreshData: Memulai refresh data...");
+      final txs = await DatabaseHelper.instance.getAllTransactions();
+      final msgs = await DatabaseHelper.instance.getMessages(limit: 30);
 
-    int tempIn = 0, tempOut = 0;
-    for (var tx in txs) {
-      final amt = tx['amount'] as int;
-      final type = tx['type'].toString().trim().toUpperCase();
-      if (type == 'IN')
-        tempIn += amt;
-      else if (type == 'OUT')
-        tempOut += amt;
+      int tempIn = 0, tempOut = 0;
+      for (var tx in txs) {
+        final amt = tx['amount'] as int;
+        final type = tx['type'].toString().trim().toUpperCase();
+        if (type == 'IN')
+          tempIn += amt;
+        else if (type == 'OUT')
+          tempOut += amt;
+      }
+
+      totalIn = tempIn;
+      totalOut = tempOut;
+      history = List.from(txs);
+      chatHistory = msgs.reversed.toList();
+      await _syncPendingCount();
+
+      debugPrint(
+        "[FinanceProvider] refreshData: Sukses (In=$totalIn, Out=$totalOut, Pending=$pendingCount)",
+      );
+      notifyListeners();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di refreshData: $e");
+      // Tidak di-rethrow agar UI tidak langsung crash, cukup log error.
     }
-
-    totalIn = tempIn;
-    totalOut = tempOut;
-    history = List.from(txs);
-    chatHistory = msgs.reversed.toList();
-    await _syncPendingCount();
-
-    debugPrint("PROVIDER: In=$totalIn Out=$totalOut Pending=$pendingCount");
-    notifyListeners();
   }
 
   Future<void> addTransaction(
@@ -48,13 +63,37 @@ class FinanceProvider extends ChangeNotifier {
     String type,
     String category,
   ) async {
-    await DatabaseHelper.instance.addTransaction(amount, note, type, category);
-    debugPrint("TX_INSERTED: $note | Rp $amount | $type | $category");
+    try {
+      debugPrint(
+        "[FinanceProvider] addTransaction: Menyimpan transaksi (Note: $note, Amt: $amount, Type: $type)",
+      );
+      await DatabaseHelper.instance.addTransaction(
+        amount,
+        note,
+        type,
+        category,
+      );
+
+      // AUTO REFRESH: Memastikan histori UI langsung sinkron setelah data masuk
+      await refreshData();
+      debugPrint(
+        "[FinanceProvider] addTransaction: Sukses menyimpan dan merefresh UI",
+      );
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di addTransaction: $e");
+      rethrow;
+    }
   }
 
   Future<void> addMessage(String text, bool isAi) async {
-    await DatabaseHelper.instance.insertMessage(text, isAi);
-    await refreshData();
+    try {
+      debugPrint("[FinanceProvider] addMessage: isAi=$isAi, Text=$text");
+      await DatabaseHelper.instance.insertMessage(text, isAi);
+      await refreshData();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di addMessage: $e");
+      rethrow;
+    }
   }
 
   Future<void> addQueryResultMessage({
@@ -63,16 +102,24 @@ class FinanceProvider extends ChangeNotifier {
     required String vizType,
     required String originalQuestion,
   }) async {
-    await DatabaseHelper.instance.insertMessage(aiSummary, true);
-    chatHistory.add({
-      'text': aiSummary,
-      'isAi': 1,
-      'queryResult': queryResult,
-      'vizType': vizType,
-      'originalQuestion': originalQuestion,
-    });
-    await _syncPendingCount();
-    notifyListeners();
+    try {
+      debugPrint(
+        "[FinanceProvider] addQueryResultMessage: Menyimpan hasil query",
+      );
+      await DatabaseHelper.instance.insertMessage(aiSummary, true);
+      chatHistory.add({
+        'text': aiSummary,
+        'isAi': 1,
+        'queryResult': queryResult,
+        'vizType': vizType,
+        'originalQuestion': originalQuestion,
+      });
+      await _syncPendingCount();
+      notifyListeners();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di addQueryResultMessage: $e");
+      rethrow;
+    }
   }
 
   Future<void> savePendingRequest({
@@ -82,79 +129,100 @@ class FinanceProvider extends ChangeNotifier {
     required String aiQuestion,
     required String reason,
   }) async {
-    await PendingRequestHelper.instance.savePending(
-      originalInput: originalInput,
-      missingFields: missingFields,
-      partialData: partialData,
-      aiQuestion: aiQuestion,
-      reason: reason,
-    );
-    await _syncPendingCount();
-    notifyListeners();
+    try {
+      debugPrint("[FinanceProvider] savePendingRequest: $originalInput");
+      await PendingRequestHelper.instance.savePending(
+        originalInput: originalInput,
+        missingFields: missingFields,
+        partialData: partialData,
+        aiQuestion: aiQuestion,
+        reason: reason,
+      );
+      await _syncPendingCount();
+      notifyListeners();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di savePendingRequest: $e");
+      rethrow;
+    }
   }
 
-  Future<List<PendingRequest>> getAllPending() =>
-      PendingRequestHelper.instance.getAllPending();
+  Future<List<PendingRequest>> getAllPending() async {
+    debugPrint("[FinanceProvider] getAllPending: Memanggil data pending");
+    return PendingRequestHelper.instance.getAllPending();
+  }
 
-  Future<PendingRequest?> getOldestPending() =>
-      PendingRequestHelper.instance.getOldestPending();
+  Future<PendingRequest?> getOldestPending() async {
+    debugPrint("[FinanceProvider] getOldestPending: Memanggil data tertua");
+    return PendingRequestHelper.instance.getOldestPending();
+  }
 
   Future<void> completePending(int pendingId) async {
-    await PendingRequestHelper.instance.markDone(pendingId);
-    if (activeResolvingPending?.id == pendingId) activeResolvingPending = null;
-    if (pendingToFollowUp?.id == pendingId) pendingToFollowUp = null;
-    isWaitingDirectReply = false;
-    await _syncPendingCount();
-    notifyListeners();
+    try {
+      debugPrint(
+        "[FinanceProvider] completePending: Menyelesaikan pending ID $pendingId",
+      );
+      await PendingRequestHelper.instance.markDone(pendingId);
+      if (activeResolvingPending?.id == pendingId)
+        activeResolvingPending = null;
+      if (pendingToFollowUp?.id == pendingId) pendingToFollowUp = null;
+      isWaitingDirectReply = false;
+      await _syncPendingCount();
+      notifyListeners();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di completePending: $e");
+      rethrow;
+    }
   }
 
   Future<void> cancelPending(int pendingId) async {
-    await PendingRequestHelper.instance.cancelPending(pendingId);
-    if (activeResolvingPending?.id == pendingId) activeResolvingPending = null;
-    if (pendingToFollowUp?.id == pendingId) pendingToFollowUp = null;
-    isWaitingDirectReply = false;
-    await _syncPendingCount();
-    notifyListeners();
+    try {
+      debugPrint(
+        "[FinanceProvider] cancelPending: Membatalkan pending ID $pendingId",
+      );
+      await PendingRequestHelper.instance.cancelPending(pendingId);
+      if (activeResolvingPending?.id == pendingId)
+        activeResolvingPending = null;
+      if (pendingToFollowUp?.id == pendingId) pendingToFollowUp = null;
+      isWaitingDirectReply = false;
+      await _syncPendingCount();
+      notifyListeners();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di cancelPending: $e");
+      rethrow;
+    }
   }
 
   void setActiveResolvingPending(PendingRequest? pending) {
+    debugPrint(
+      "[FinanceProvider] setActiveResolvingPending: ${pending?.originalInput}",
+    );
     activeResolvingPending = pending;
     notifyListeners();
   }
 
   void setWaitingDirectReply(bool value) {
+    debugPrint("[FinanceProvider] setWaitingDirectReply: $value");
     isWaitingDirectReply = value;
     notifyListeners();
   }
 
   void consumeDirectReply() {
+    debugPrint(
+      "[FinanceProvider] consumeDirectReply: Reset state direct reply",
+    );
     isWaitingDirectReply = false;
   }
 
   void triggerFollowUp(PendingRequest pending) {
+    debugPrint("[FinanceProvider] triggerFollowUp: ID ${pending.id}");
     pendingToFollowUp = pending;
     activeResolvingPending = pending;
     notifyListeners();
   }
 
   void consumeFollowUp() {
+    debugPrint("[FinanceProvider] consumeFollowUp: Reset state follow up");
     pendingToFollowUp = null;
-    notifyListeners();
-  }
-
-  bool isWaitingFollowUpConfirm = false;
-  List<PendingRequest> pendingFollowUpList = [];
-
-  void setPendingFollowUpQuestion(String message, List<PendingRequest> list) {
-    pendingFollowUpList = list;
-    isWaitingFollowUpConfirm = true;
-    chatHistory.add({'text': message, 'isAi': 1, 'isFollowUp': true});
-    notifyListeners();
-  }
-
-  void setWaitingFollowUpConfirm(bool value) {
-    isWaitingFollowUpConfirm = value;
-    notifyListeners();
   }
 
   Future<void> savePendingRequestNew({
@@ -169,24 +237,34 @@ class FinanceProvider extends ChangeNotifier {
     List<String> missingFields = const [],
     Map<String, dynamic> partialData = const {},
   }) async {
-    await PendingRequestHelper.instance.savePending(
-      originalInput: originalInput,
-      nama: nama,
-      nominal: nominal,
-      quantity: quantity,
-      aiQuestion: aiQuestion,
-      reason: reason,
-      category: category,
-      type: type,
-      missingFields: missingFields,
-      partialData: partialData,
-    );
-    await _syncPendingCount();
-    notifyListeners();
+    try {
+      debugPrint(
+        "[FinanceProvider] savePendingRequestNew: Nama=$nama, Nominal=$nominal",
+      );
+      await PendingRequestHelper.instance.savePending(
+        originalInput: originalInput,
+        nama: nama,
+        nominal: nominal,
+        quantity: quantity,
+        aiQuestion: aiQuestion,
+        reason: reason,
+        category: category,
+        type: type,
+        missingFields: missingFields,
+        partialData: partialData,
+      );
+      await _syncPendingCount();
+      notifyListeners();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di savePendingRequestNew: $e");
+      rethrow;
+    }
   }
 
-  Future<RawQueryResult> executeQuery(String validatedSql) =>
-      DatabaseHelper.instance.rawSelect(validatedSql);
+  Future<RawQueryResult> executeQuery(String validatedSql) {
+    debugPrint("[FinanceProvider] executeQuery: $validatedSql");
+    return DatabaseHelper.instance.rawSelect(validatedSql);
+  }
 
   void setAiThinking(bool value) {
     isAiThinking = value;
@@ -194,15 +272,27 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   Future<void> clearAll() async {
-    await DatabaseHelper.instance.clearAllData();
-    activeResolvingPending = null;
-    pendingToFollowUp = null;
-    isWaitingDirectReply = false;
-    await refreshData();
+    try {
+      debugPrint("[FinanceProvider] clearAll: Mengosongkan database");
+      await DatabaseHelper.instance.clearAllData();
+      activeResolvingPending = null;
+      pendingToFollowUp = null;
+      isWaitingDirectReply = false;
+      await refreshData();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di clearAll: $e");
+      rethrow;
+    }
   }
 
   Future<void> deleteTx(int id) async {
-    await DatabaseHelper.instance.deleteTransaction(id);
-    await refreshData();
+    try {
+      debugPrint("[FinanceProvider] deleteTx: Menghapus TX ID $id");
+      await DatabaseHelper.instance.deleteTransaction(id);
+      await refreshData();
+    } catch (e) {
+      debugPrint("[FinanceProvider] ERROR di deleteTx: $e");
+      rethrow;
+    }
   }
 }

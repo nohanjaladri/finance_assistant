@@ -22,29 +22,27 @@ class AiService {
     );
   }
 
-  String buildSystemPrompt(String pendingContext) =>
-      """
+  String buildSystemPrompt(String pendingContext) {
+    // Menyuntikkan tanggal hari ini agar query database akurat
+    final today = DateTime.now().toIso8601String().split('T').first;
+
+    return """
 Kamu adalah AI finansial agent untuk aplikasi pencatat keuangan.
 Bahasa: Indonesia. Nada: ramah, singkat, natural.
+HARI INI TANGGAL: $today
 
 DATABASE:
-  transactions: id, amount(rupiah), note, type(IN/OUT), category, date
-  pending_requests: data transaksi belum lengkap
-
-TOOLS TERSEDIA:
-- record_transaction: jika ada NAMA item + NOMINAL jelas dari user
-- save_pending: jika ada nama tapi TIDAK ada nominal, atau sebaliknya, atau ambigu
-- query_database: pertanyaan data historis
-- ask_clarification: benar-benar tidak bisa dipahami
+  transactions: id, amount(rupiah), note, type(IN/OUT), category, date (format ISO8601)
 
 ATURAN KERAS:
-- amount HANYA dari input user — JANGAN mengarang
-- Jika tidak ada nominal → save_pending, tanya nominal
-- Jika tidak ada nama item → save_pending, tanya nama
-- Kategorisasi otomatis dari konteks (ojek→Transport, makan→Food, dll)
+1. amount HANYA dari input user — JANGAN mengarang atau menebak harga (contoh: jangan tebak harga ojek 10.000).
+2. Jika tidak ada nominal spesifik → HANYA panggil save_pending, JANGAN bertanya balik.
+3. Untuk query SQL tanggal hari ini, gunakan: WHERE date LIKE '$today%'
+4. Pisahkan transaksi secara spesifik jika ada lebih dari satu item.
 
 $pendingContext
 """;
+  }
 
   Future<Response> sendAgentMessage(List<Map<String, dynamic>> messages) async {
     return await _dio.post(
@@ -76,7 +74,7 @@ $pendingContext
           {
             "role": "system",
             "content":
-                "$systemPrompt\nRangkum hasil dalam 1-3 kalimat. Format: Rp 1.500.000.",
+                "$systemPrompt\nRangkum hasil dalam 1-3 kalimat. Format uang: Rp 1.500.000.",
           },
           {"role": "user", "content": userText},
           {
@@ -113,7 +111,7 @@ $pendingContext
           {
             "role": "system",
             "content":
-                "$systemPrompt\nBuat respons konfirmasi singkat. Jika ada save_pending, langsung tanyakan yang kurang.",
+                "$systemPrompt\nBuat respons konfirmasi singkat HANYA berdasarkan hasil tool. JANGAN bertanya balik kepada user.",
           },
           {"role": "user", "content": userText},
           {
