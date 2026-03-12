@@ -1,9 +1,3 @@
-/// ai_agent_tools.dart
-/// Definisi tools yang disediakan untuk AI agent
-/// AI tinggal pilih tool mana yang dieksekusi — tidak perlu klasifikasi manual
-library;
-
-/// Daftar tools dalam format Groq/OpenAI function calling
 const List<Map<String, dynamic>> agentTools = [
   {
     "type": "function",

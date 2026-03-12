@@ -1,23 +1,18 @@
-/// home_screen.dart
-/// Pending request baru: wajib(nama+nominal), opsional(qty+datetime), auto(AI)
-/// Follow-up: setelah catat berhasil DAN ketika idle
-/// Follow-up format: "Ada X data belum lengkap, mau dilengkapi?"
-
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:dio/dio.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-import 'logic/voice_service.dart';
-import 'logic/finance_provider.dart';
-import 'logic/query_validator.dart';
-import 'logic/database_helper.dart';
-import 'logic/pending_request_helper.dart';
-import 'logic/ai_agent_tools.dart';
-import 'widgets/query_result_card.dart';
-import 'widgets/pending_reminder_card.dart';
+import '../../core/utils/amount_parser.dart';
+import '../../core/utils/query_validator.dart';
+import '../../data/database/database_helper.dart';
+import '../../data/database/pending_request_helper.dart';
+import '../../data/services/ai_service.dart';
+import '../../data/services/voice_service.dart';
+import '../providers/finance_provider.dart';
+import '../widgets/query_result_card.dart';
+import '../widgets/pending_reminder_card.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -27,201 +22,56 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final Dio _dio = Dio();
   bool isChatExpanded = false;
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   DateTime? _lastPressedAt;
 
-  static const String _agentModel = "meta-llama/llama-4-scout-17b-16e-instruct";
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<FinanceProvider>().addListener(_onFinanceChanged);
+    });
+  }
 
-  // ==========================================
-  // PARSING AMOUNT
-  // ==========================================
+  void _onFinanceChanged() {
+    final finance = context.read<FinanceProvider>();
+    if (finance.pendingToFollowUp != null) {
+      _injectFollowUpBubble(finance.pendingToFollowUp!);
+      finance.consumeFollowUp();
+    }
+  }
 
-  static const Map<String, int> _wordNumbers = {
-    'nol': 0,
-    'satu': 1,
-    'dua': 2,
-    'tiga': 3,
-    'empat': 4,
-    'lima': 5,
-    'enam': 6,
-    'tujuh': 7,
-    'delapan': 8,
-    'sembilan': 9,
-    'sepuluh': 10,
-    'sebelas': 11,
-    'dua belas': 12,
-    'tiga belas': 13,
-    'empat belas': 14,
-    'lima belas': 15,
-    'enam belas': 16,
-    'tujuh belas': 17,
-    'delapan belas': 18,
-    'sembilan belas': 19,
-    'dua puluh': 20,
-    'tiga puluh': 30,
-    'empat puluh': 40,
-    'lima puluh': 50,
-    'enam puluh': 60,
-    'tujuh puluh': 70,
-    'delapan puluh': 80,
-    'sembilan puluh': 90,
-    'seratus': 100,
-    'dua ratus': 200,
-    'tiga ratus': 300,
-    'empat ratus': 400,
-    'lima ratus': 500,
-    'enam ratus': 600,
-    'tujuh ratus': 700,
-    'delapan ratus': 800,
-    'sembilan ratus': 900,
-    'seribu': 1000,
-    'sejuta': 1000000,
-  };
+  void _injectFollowUpBubble(PendingRequest pending) {
+    if (!isChatExpanded) setState(() => isChatExpanded = true);
+    final finance = context.read<FinanceProvider>();
+    finance.setWaitingDirectReply(true);
+    finance.addMessage(pending.aiQuestion, true);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+  }
 
-  int? _wordToInt(String word) {
-    word = word.trim();
-    if (word.isEmpty) return null;
-    if (_wordNumbers.containsKey(word)) return _wordNumbers[word];
-    for (final tens in [20, 30, 40, 50, 60, 70, 80, 90]) {
-      final tw = _wordNumbers.entries
-          .firstWhere(
-            (e) => e.value == tens,
-            orElse: () => const MapEntry('', 0),
-          )
-          .key;
-      if (tw.isEmpty) continue;
-      if (word.startsWith(tw)) {
-        final rest = word.substring(tw.length).trim();
-        if (rest.isEmpty) return tens;
-        final ones = _wordNumbers[rest];
-        if (ones != null && ones < 10) return tens + ones;
+  @override
+  void dispose() {
+    context.read<FinanceProvider>().removeListener(_onFinanceChanged);
+    _scrollController.dispose();
+    _textController.dispose();
+    super.dispose();
+  }
+
+  String _getApiKey() => dotenv.maybeGet('GROQ_API_KEY') ?? "";
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
       }
-    }
-    return int.tryParse(word);
+    });
   }
-
-  int? _parseWordAmount(String text) {
-    final lower = text.toLowerCase();
-    final jutaReg = RegExp(
-      r'(?:(\d+)|([a-z]+?(?:\s+[a-z]+?)*?))\s+juta(?:\s+(?:(\d+)|([a-z]+?(?:\s+[a-z]+?)*?))\s+ribu)?',
-    );
-    final jutaMatch = jutaReg.firstMatch(lower);
-    if (jutaMatch != null) {
-      int? jv =
-          int.tryParse(jutaMatch.group(1) ?? '') ??
-          _wordToInt(jutaMatch.group(2) ?? '');
-      if (jv != null && jv > 0) {
-        int total = jv * 1000000;
-        final rs = (jutaMatch.group(3) ?? jutaMatch.group(4) ?? '').trim();
-        if (rs.isNotEmpty) {
-          int? rv = int.tryParse(rs) ?? _wordToInt(rs);
-          if (rv != null) total += rv * 1000;
-        }
-        return total;
-      }
-    }
-    final ratusRibuReg = RegExp(
-      r'(?:(\d+)|([a-z]+(?:\s+[a-z]+)*))\s+ratus\s+ribu',
-    );
-    final rrm = ratusRibuReg.firstMatch(lower);
-    if (rrm != null) {
-      int? v =
-          int.tryParse(rrm.group(1) ?? '') ?? _wordToInt(rrm.group(2) ?? '');
-      if (v != null && v > 0) return v * 100000;
-    }
-    final ribuReg = RegExp(
-      r'(?:(\d+(?:[.,]\d+)?)|([a-z]+(?:\s+[a-z]+)*))\s+ribu',
-    );
-    final rm = ribuReg.firstMatch(lower);
-    if (rm != null) {
-      final raw = rm.group(1);
-      if (raw != null) {
-        final v = double.tryParse(raw.replaceAll(',', '.'));
-        if (v != null && v > 0) return (v * 1000).round();
-      }
-      int? v = _wordToInt(rm.group(2) ?? '');
-      if (v != null && v > 0) return v * 1000;
-    }
-    final ratusReg = RegExp(r'(?:(\d+)|([a-z]+(?:\s+[a-z]+)*))\s+ratus');
-    final ratm = ratusReg.firstMatch(lower);
-    if (ratm != null) {
-      int? v =
-          int.tryParse(ratm.group(1) ?? '') ?? _wordToInt(ratm.group(2) ?? '');
-      if (v != null && v > 0) return v * 100;
-    }
-    for (final e in _wordNumbers.entries) {
-      if (lower.contains(e.key) && e.value > 0) return e.value;
-    }
-    return null;
-  }
-
-  String _cleanNumberString(String raw) {
-    final dc = '.'.allMatches(raw).length;
-    final cc = ','.allMatches(raw).length;
-    if (dc == 0 && cc == 0) return raw;
-    if (dc > 1) return raw.replaceAll('.', '');
-    if (cc > 1) return raw.replaceAll(',', '');
-    if (dc == 1 && cc == 0) {
-      final parts = raw.split('.');
-      if (parts.last.length == 3 && parts.first.length <= 3)
-        return raw.replaceAll('.', '');
-      return parts.first;
-    }
-    if (cc == 1 && dc == 0) {
-      final parts = raw.split(',');
-      if (parts.last.length == 3 && parts.first.length <= 3)
-        return raw.replaceAll(',', '');
-      return parts.first;
-    }
-    if (dc == 1 && cc == 1) {
-      final di = raw.indexOf('.');
-      final ci = raw.indexOf(',');
-      if (di < ci) return raw.replaceAll('.', '').split(',').first;
-      return raw.replaceAll(',', '').split('.').first;
-    }
-    return raw.replaceAll(RegExp(r'[.,]'), '');
-  }
-
-  int? _parseAmount(String text) {
-    final lower = text.toLowerCase().trim();
-    final jutaDigit = RegExp(
-      r'(\d+(?:[.,]\d+)?)\s*(?:juta|jt\b)',
-      caseSensitive: false,
-    ).firstMatch(lower);
-    if (jutaDigit != null) {
-      final v = double.tryParse(jutaDigit.group(1)!.replaceAll(',', '.'));
-      if (v != null && v > 0) return (v * 1000000).round();
-    }
-    final ribuDigit = RegExp(
-      r'(\d+(?:[.,]\d+)?)\s*(?:rb|ribu|k\b)',
-      caseSensitive: false,
-    ).firstMatch(lower);
-    if (ribuDigit != null) {
-      final v = double.tryParse(ribuDigit.group(1)!.replaceAll(',', '.'));
-      if (v != null && v > 0) return (v * 1000).round();
-    }
-    final rp = RegExp(
-      r'rp\.?\s*([\d.,]+)',
-      caseSensitive: false,
-    ).firstMatch(lower);
-    if (rp != null) {
-      final v = int.tryParse(_cleanNumberString(rp.group(1)!));
-      if (v != null && v > 0) return v;
-    }
-    final num = RegExp(r'\b(\d[\d.,]*\d|\d+)\b').firstMatch(lower);
-    if (num != null) {
-      final v = int.tryParse(_cleanNumberString(num.group(1)!));
-      if (v != null && v > 0) return v;
-    }
-    return _parseWordAmount(lower);
-  }
-
-  // ==========================================
-  // CEK DIRECT REPLY
-  // ==========================================
 
   bool _isDirectReplyOnly(String userText, PendingRequest activePending) {
     final lower = userText.toLowerCase().trim();
@@ -272,139 +122,35 @@ class _HomeScreenState extends State<HomeScreen> {
     return false;
   }
 
-  // ==========================================
-  // LIFECYCLE
-  // ==========================================
-
-  @override
-  void initState() {
-    super.initState();
-    _dio.interceptors.add(
-      InterceptorsWrapper(
-        onError: (DioException e, handler) {
-          if (e.response != null) {
-            debugPrint(
-              "GROQ_ERROR_${e.response!.statusCode}: ${e.response!.data}",
-            );
-          }
-          handler.next(e);
-        },
-      ),
-    );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<FinanceProvider>().addListener(_onFinanceChanged);
-    });
-  }
-
-  void _onFinanceChanged() {
-    final finance = context.read<FinanceProvider>();
-    if (finance.pendingToFollowUp != null) {
-      _injectFollowUpBubble(finance.pendingToFollowUp!);
-      finance.consumeFollowUp();
-    }
-  }
-
-  void _injectFollowUpBubble(PendingRequest pending) {
-    if (!isChatExpanded) setState(() => isChatExpanded = true);
-    final finance = context.read<FinanceProvider>();
-    finance.setWaitingDirectReply(true);
-    finance.addMessage(pending.aiQuestion, true);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
-  }
-
-  @override
-  void dispose() {
-    context.read<FinanceProvider>().removeListener(_onFinanceChanged);
-    _scrollController.dispose();
-    _textController.dispose();
-    super.dispose();
-  }
-
-  String _getApiKey() => dotenv.maybeGet('GROQ_API_KEY') ?? "";
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  // ==========================================
-  // FOLLOW-UP PENDING: tanya ke user
-  // "Ada X data belum lengkap, mau dilengkapi?"
-  // ==========================================
-
   Future<void> _maybeShowFollowUp(FinanceProvider finance) async {
     final count = await PendingRequestHelper.instance.countPending();
     if (count == 0) return;
 
     final all = await finance.getAllPending();
-
-    // Bangun ringkasan daftar pending
     final summaries = all
         .take(3)
-        .map((p) => '• ${p.followUpSummary}')
+        .map((p) => '• ${p.nama ?? p.originalInput}')
         .join('\n');
     final more = all.length > 3 ? '\n...dan ${all.length - 3} lainnya' : '';
 
     final followUpMsg =
-        'Ada $count data transaksi yang belum lengkap, mau dilengkapi sekarang?\n\n'
-        '$summaries$more';
-
-    // Tambah bubble AI dengan tombol Ya/Nanti
+        'Ada $count data transaksi yang belum lengkap, mau dilengkapi sekarang?\n\n$summaries$more';
     finance.setPendingFollowUpQuestion(followUpMsg, all);
   }
 
-  // ==========================================
-  // BUILD CONTEXT UNTUK AI
-  // ==========================================
-
   Future<String> _buildPendingContext(FinanceProvider finance) async {
-    final all = await finance.getAllPending();
-    if (all.isEmpty) return "";
-    final oldest = all.first;
-    final others = all.length - 1;
-    return """
-=== TRANSAKSI TERTUNDA ===
-Prioritas: ${oldest.contextSummary}
-${others > 0 ? '+ $others lainnya' : ''}
-==========================
-""";
+    if (finance.activeResolvingPending == null) {
+      return "";
+    }
+
+    final active = finance.activeResolvingPending!;
+    final nama = active.nama ?? active.originalInput;
+    final nominal = active.nominal != null
+        ? "Rp ${active.nominal}"
+        : "Belum ada";
+
+    return "=== TRANSAKSI TERTUNDA (SEDANG DILENGKAPI) ===\nNama: $nama\nNominal: $nominal\nPertanyaan AI sebelumnya: ${active.aiQuestion}\n==========================\n";
   }
-
-  String _buildSystemPrompt(String pendingContext) =>
-      """
-Kamu adalah AI finansial agent untuk aplikasi pencatat keuangan.
-Bahasa: Indonesia. Nada: ramah, singkat, natural.
-
-DATABASE:
-  transactions: id, amount(rupiah), note, type(IN/OUT), category, date
-  pending_requests: data transaksi belum lengkap
-
-TOOLS TERSEDIA:
-- record_transaction: jika ada NAMA item + NOMINAL jelas dari user
-- save_pending: jika ada nama tapi TIDAK ada nominal, atau sebaliknya, atau ambigu
-- query_database: pertanyaan data historis
-- ask_clarification: benar-benar tidak bisa dipahami
-
-ATURAN KERAS:
-- amount HANYA dari input user — JANGAN mengarang
-- Jika tidak ada nominal → save_pending, tanya nominal
-- Jika tidak ada nama item → save_pending, tanya nama
-- Kategorisasi otomatis dari konteks (ojek→Transport, makan→Food, dll)
-
-$pendingContext
-${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.' : ''}
-""";
-
-  // ==========================================
-  // ENTRY POINT: PROCESS MESSAGE
-  // ==========================================
 
   Future<void> _processMessage(String userText) async {
     if (userText.trim().isEmpty) return;
@@ -419,14 +165,14 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
 
     final finance = context.read<FinanceProvider>();
     final voice = context.read<VoiceService>();
+    final aiService = AiService(apiKey: apiKey);
 
-    // Cek apakah ini jawaban follow-up Ya/Tidak
     if (finance.isWaitingFollowUpConfirm) {
       await _handleFollowUpConfirm(userText, finance, voice, apiKey);
       return;
     }
 
-    final userAmount = _parseAmount(userText);
+    final userAmount = AmountParser.parseAmount(userText);
     final wasWaitingDirectReply = finance.isWaitingDirectReply;
     final activePendingSnapshot = finance.activeResolvingPending;
 
@@ -439,17 +185,13 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
     try {
       final pendingContext = await _buildPendingContext(finance);
 
-      // SHORTCUT: DIRECT REPLY — angka langsung untuk pending aktif
       if (wasWaitingDirectReply &&
           userAmount != null &&
           activePendingSnapshot != null &&
           _isDirectReplyOnly(userText, activePendingSnapshot)) {
-        debugPrint(
-          "DIRECT_REPLY: ID=${activePendingSnapshot.id} amount=$userAmount",
-        );
         await _executeResolvePending(
           userText: userText,
-          apiKey: apiKey,
+          aiService: aiService,
           finance: finance,
           voice: voice,
           resolvedAmount: userAmount,
@@ -459,8 +201,7 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
         return;
       }
 
-      // AI AGENT: Tool Calling
-      final systemPrompt = _buildSystemPrompt(pendingContext);
+      final systemPrompt = aiService.buildSystemPrompt(pendingContext);
       final messages = [
         {"role": "system", "content": systemPrompt},
         ...finance.chatHistory
@@ -475,18 +216,7 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
         {"role": "user", "content": userText},
       ];
 
-      final agentResponse = await _dio.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        options: Options(headers: {"Authorization": "Bearer $apiKey"}),
-        data: {
-          "model": _agentModel,
-          "messages": messages,
-          "tools": agentTools,
-          "tool_choice": "auto",
-          "max_tokens": 1024,
-        },
-      );
-
+      final agentResponse = await aiService.sendAgentMessage(messages);
       final choice = agentResponse.data['choices'][0];
       final message = choice['message'];
       final toolCalls = message['tool_calls'] as List<dynamic>?;
@@ -496,7 +226,7 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
           toolCalls: toolCalls,
           agentMessage: message,
           userText: userText,
-          apiKey: apiKey,
+          aiService: aiService,
           finance: finance,
           voice: voice,
           pendingContext: pendingContext,
@@ -506,7 +236,6 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
         final content = message['content'] as String? ?? "";
         await finance.addMessage(content, true);
         if (isChatExpanded) voice.speak(content);
-        // Idle: tampilkan follow-up jika ada pending
         await _maybeShowFollowUp(finance);
       }
     } catch (e) {
@@ -517,10 +246,6 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
       _scrollToBottom();
     }
   }
-
-  // ==========================================
-  // HANDLE JAWABAN FOLLOW-UP (Ya / Tidak)
-  // ==========================================
 
   Future<void> _handleFollowUpConfirm(
     String userText,
@@ -537,51 +262,34 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
     await finance.addMessage(userText, false);
 
     if (isYes) {
-      // Ambil pending tertua dan mulai lengkapi
       final oldest = await finance.getOldestPending();
       if (oldest != null) {
         finance.setActiveResolvingPending(oldest);
         finance.setWaitingDirectReply(true);
 
-        // Tampilkan detail pending yang perlu dilengkapi
-        final detail = _buildFollowUpDetail(oldest);
-        await finance.addMessage(detail, true);
+        final buf = StringBuffer();
+        buf.writeln('Oke, lengkapi data ini:\n');
+        buf.writeln('📋 *${oldest.nama ?? oldest.originalInput}*');
+        if (oldest.nama != null) buf.writeln('   Nama: ${oldest.nama}');
+        if (oldest.nominal != null)
+          buf.writeln('   Harga: Rp ${_formatRupiah(oldest.nominal!)}');
+        buf.writeln('   Jumlah: ${oldest.quantity}x');
+        buf.writeln('\n${oldest.aiQuestion}');
+
+        await finance.addMessage(buf.toString(), true);
         if (isChatExpanded) voice.speak(oldest.aiQuestion);
       }
     } else {
-      // Tidak mau → simpan, tanya lagi nanti
       await finance.addMessage('Oke, nanti saya ingatkan lagi ya! 😊', true);
     }
-
     _scrollToBottom();
   }
-
-  /// Bangun pesan detail untuk pending yang mau dilengkapi
-  String _buildFollowUpDetail(PendingRequest p) {
-    final buf = StringBuffer();
-    buf.writeln('Oke, lengkapi data ini:');
-    buf.writeln('');
-    buf.writeln('📋 *${p.nama ?? p.originalInput}*');
-    if (p.nama != null) buf.writeln('   Nama: ${p.nama}');
-    if (p.nominal != null)
-      buf.writeln('   Harga: Rp ${_formatRupiah(p.nominal!)}');
-    buf.writeln('   Jumlah: ${p.quantity}x');
-    buf.writeln('   Waktu input: ${p.formattedInputDatetime}');
-    buf.writeln('   Kurang: ${p.missingFieldsLabel}');
-    buf.writeln('');
-    buf.writeln(p.aiQuestion);
-    return buf.toString();
-  }
-
-  // ==========================================
-  // EKSEKUSI TOOL CALLS
-  // ==========================================
 
   Future<void> _executeToolCalls({
     required List<dynamic> toolCalls,
     required Map<String, dynamic> agentMessage,
     required String userText,
-    required String apiKey,
+    required AiService aiService,
     required FinanceProvider finance,
     required VoiceService voice,
     required String pendingContext,
@@ -603,33 +311,64 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
         debugPrint("TOOL_ARG_PARSE_ERROR: $e");
       }
 
-      debugPrint("TOOL_CALL: $toolName | args=$args");
       String result = "";
+      if (toolName == "record_transaction") {
+        final finalAmount = userAmount ?? 0;
+        if (finalAmount <= 0) {
+          result = "error: tidak ada nominal di input user";
+        } else {
+          final note = args['note'] as String? ?? "Transaksi";
+          final type = (args['type'] as String? ?? 'OUT').toUpperCase();
+          final category = args['category'] as String? ?? 'Other';
+          await finance.addTransaction(finalAmount, note, type, category);
+          if (finance.activeResolvingPending != null)
+            await finance.completePending(finance.activeResolvingPending!.id);
+          result = "success: $note Rp $finalAmount $type $category";
+          anyRecordSuccess = true;
+        }
+      } else if (toolName == "save_pending") {
+        final originalInput = args['original_input'] as String? ?? "";
+        final partialNote = args['partial_note'] as String? ?? originalInput;
+        final partialType = (args['partial_type'] as String? ?? 'OUT')
+            .replaceAll('UNKNOWN', 'OUT')
+            .toUpperCase();
+        final partialCategory = args['partial_category'] as String? ?? 'Other';
+        final question =
+            args['question'] as String? ?? 'Bisa lengkapi informasinya?';
+        final reason = args['reason'] as String? ?? 'Data tidak lengkap';
 
-      switch (toolName) {
-        case "record_transaction":
-          result = await _toolRecordTransaction(
-            args: args,
-            finance: finance,
-            userAmount: userAmount,
-          );
-          if (result.startsWith('success')) anyRecordSuccess = true;
-          break;
-        case "save_pending":
-          result = await _toolSavePending(
-            args: args,
-            finance: finance,
-            userAmount: userAmount,
-          );
-          break;
-        case "query_database":
-          result = "query_pending";
-          break;
-        case "ask_clarification":
-          result = "clarification_sent";
-          break;
-        default:
-          result = "unknown_tool";
+        final nama = (partialNote != originalInput && partialNote.isNotEmpty)
+            ? partialNote
+            : null;
+        final nominal = userAmount;
+        final missing = <String>[];
+        if (nama == null) missing.add('nama');
+        if (nominal == null) missing.add('nominal');
+
+        await finance.savePendingRequestNew(
+          originalInput: originalInput,
+          nama: nama,
+          nominal: nominal,
+          aiQuestion: question,
+          reason: reason,
+          category: partialCategory,
+          type: partialType,
+          missingFields: missing,
+          partialData: {
+            'note': partialNote,
+            'type': partialType,
+            'category': partialCategory,
+          },
+        );
+
+        final oldest = await finance.getOldestPending();
+        if (oldest != null) finance.setActiveResolvingPending(oldest);
+        finance.setWaitingDirectReply(true);
+        result = "saved: $question";
+      } else if (toolName == "query_database") {
+        result = "query_pending";
+      } else if (toolName == "ask_clarification") {
+        result = "clarification_sent";
       }
 
       toolResults.add({
@@ -640,25 +379,71 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
       });
     }
 
-    // Handle query
     final queryTool = toolResults
         .where((r) => r['result'] == 'query_pending')
         .firstOrNull;
     if (queryTool != null) {
-      await _executeQueryTool(
-        args: queryTool['args'] as Map<String, dynamic>,
-        toolCallId: queryTool['tool_call_id'] as String,
-        agentMessage: agentMessage,
-        userText: userText,
-        apiKey: apiKey,
-        finance: finance,
-        voice: voice,
-        pendingContext: pendingContext,
+      final args = queryTool['args'] as Map<String, dynamic>;
+      final sql = args['sql'] as String? ?? '';
+      final vizType = args['viz_type'] as String? ?? 'auto';
+
+      if (sql.isEmpty) {
+        await finance.addMessage("Tidak bisa membuat query ini.", true);
+        return;
+      }
+
+      final validation = QueryValidator.validate(sql);
+      if (!validation.isValid) {
+        await finance.addMessage(
+          "Query tidak valid: ${validation.errorMessage}",
+          true,
+        );
+        return;
+      }
+
+      final queryResult = await finance.executeQuery(
+        validation.sanitizedQuery!,
       );
+      if (!queryResult.isSuccess) {
+        await finance.addMessage("Gagal mengambil data.", true);
+        return;
+      }
+
+      final resultContent = queryResult.isEffectivelyEmpty
+          ? "Tidak ada data ditemukan"
+          : "Ditemukan ${queryResult.rowCount} baris:\n${queryResult.rows.take(10).map((r) => r.toString()).join('\n')}";
+
+      try {
+        final sysPrompt = aiService.buildSystemPrompt(pendingContext);
+        final aiSummary = await aiService.summarizeQuery(
+          sysPrompt,
+          userText,
+          agentMessage,
+          queryTool['tool_call_id'] as String,
+          resultContent,
+        );
+        if (queryResult.isEffectivelyEmpty) {
+          await finance.addMessage(aiSummary, true);
+        } else {
+          await finance.addQueryResultMessage(
+            aiSummary: aiSummary,
+            queryResult: queryResult,
+            vizType: vizType,
+            originalQuestion: userText,
+          );
+        }
+        if (isChatExpanded) voice.speak(aiSummary);
+      } catch (_) {
+        await finance.addMessage(
+          queryResult.isEffectivelyEmpty
+              ? "Belum ada data."
+              : "Ada ${queryResult.rowCount} data.",
+          true,
+        );
+      }
       return;
     }
 
-    // Handle clarification
     final clarifyTool = toolResults
         .where((r) => r['result'] == 'clarification_sent')
         .firstOrNull;
@@ -672,212 +457,6 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
       return;
     }
 
-    // Generate konfirmasi
-    await _generateAgentConfirmation(
-      toolResults: toolResults,
-      agentMessage: agentMessage,
-      userText: userText,
-      apiKey: apiKey,
-      finance: finance,
-      voice: voice,
-      pendingContext: pendingContext,
-    );
-
-    // ✅ Setelah catat berhasil → tampilkan follow-up pending jika ada
-    if (anyRecordSuccess) {
-      await Future.delayed(const Duration(milliseconds: 500));
-      await _maybeShowFollowUp(finance);
-    }
-  }
-
-  // ==========================================
-  // TOOL: record_transaction
-  // ==========================================
-
-  Future<String> _toolRecordTransaction({
-    required Map<String, dynamic> args,
-    required FinanceProvider finance,
-    required int? userAmount,
-  }) async {
-    final finalAmount = userAmount ?? 0;
-    if (finalAmount <= 0) {
-      debugPrint("RECORD_REJECTED: tidak ada nominal dari user");
-      return "error: tidak ada nominal di input user";
-    }
-    final note = args['note'] as String? ?? "Transaksi";
-    final type = (args['type'] as String? ?? 'OUT').toUpperCase();
-    final category = args['category'] as String? ?? 'Other';
-
-    await finance.addTransaction(finalAmount, note, type, category);
-    if (finance.activeResolvingPending != null) {
-      await finance.completePending(finance.activeResolvingPending!.id);
-    }
-    return "success: $note Rp $finalAmount $type $category";
-  }
-
-  // ==========================================
-  // TOOL: save_pending — BARU dengan 4 field
-  // ==========================================
-
-  Future<String> _toolSavePending({
-    required Map<String, dynamic> args,
-    required FinanceProvider finance,
-    required int? userAmount,
-  }) async {
-    final originalInput = args['original_input'] as String? ?? "";
-    final partialNote = args['partial_note'] as String? ?? originalInput;
-    final partialType = (args['partial_type'] as String? ?? 'OUT')
-        .replaceAll('UNKNOWN', 'OUT')
-        .toUpperCase();
-    final partialCategory = args['partial_category'] as String? ?? 'Other';
-    final question =
-        args['question'] as String? ?? 'Bisa lengkapi informasinya?';
-    final reason = args['reason'] as String? ?? 'Data tidak lengkap';
-
-    // Tentukan nama dan nominal dari apa yang sudah diketahui
-    // nama: ambil dari partial_note jika bukan placeholder
-    final nama = (partialNote != originalInput && partialNote.isNotEmpty)
-        ? partialNote
-        : null;
-    // nominal: dari userAmount jika ada (mungkin AI kirim save_pending padahal ada nominal)
-    final nominal = userAmount;
-
-    // Hitung missing fields
-    final missing = <String>[];
-    if (nama == null) missing.add('nama');
-    if (nominal == null) missing.add('nominal');
-
-    await finance.savePendingRequestNew(
-      originalInput: originalInput,
-      nama: nama,
-      nominal: nominal,
-      aiQuestion: question,
-      reason: reason,
-      category: partialCategory,
-      type: partialType,
-      missingFields: missing,
-      partialData: {
-        'note': partialNote,
-        'type': partialType,
-        'category': partialCategory,
-      },
-    );
-
-    final oldest = await finance.getOldestPending();
-    if (oldest != null) finance.setActiveResolvingPending(oldest);
-    finance.setWaitingDirectReply(true);
-
-    return "saved: $question";
-  }
-
-  // ==========================================
-  // TOOL: query_database
-  // ==========================================
-
-  Future<void> _executeQueryTool({
-    required Map<String, dynamic> args,
-    required String toolCallId,
-    required Map<String, dynamic> agentMessage,
-    required String userText,
-    required String apiKey,
-    required FinanceProvider finance,
-    required VoiceService voice,
-    required String pendingContext,
-  }) async {
-    final sql = args['sql'] as String? ?? '';
-    final vizType = args['viz_type'] as String? ?? 'auto';
-    if (sql.isEmpty) {
-      await finance.addMessage("Tidak bisa membuat query ini.", true);
-      return;
-    }
-
-    final validation = QueryValidator.validate(sql);
-    if (!validation.isValid) {
-      await finance.addMessage(
-        "Query tidak valid: ${validation.errorMessage}",
-        true,
-      );
-      return;
-    }
-
-    final queryResult = await finance.executeQuery(validation.sanitizedQuery!);
-    if (!queryResult.isSuccess) {
-      await finance.addMessage("Gagal mengambil data.", true);
-      return;
-    }
-
-    final resultContent = queryResult.isEffectivelyEmpty
-        ? "Tidak ada data ditemukan"
-        : "Ditemukan ${queryResult.rowCount} baris:\n${queryResult.rows.take(10).map((r) => r.toString()).join('\n')}";
-
-    try {
-      final r = await _dio.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        options: Options(headers: {"Authorization": "Bearer $apiKey"}),
-        data: {
-          "model": _agentModel,
-          "messages": [
-            {
-              "role": "system",
-              "content":
-                  "${_buildSystemPrompt(pendingContext)}\nRangkum hasil dalam 1-3 kalimat. Format: Rp 1.500.000.",
-            },
-            {"role": "user", "content": userText},
-            {
-              "role": "assistant",
-              "content": agentMessage['content'] ?? "",
-              "tool_calls": agentMessage['tool_calls'],
-            },
-            {
-              "role": "tool",
-              "tool_call_id": toolCallId,
-              "content": resultContent,
-            },
-          ],
-          "tools": agentTools,
-          "max_tokens": 512,
-        },
-      );
-      final aiSummary =
-          r.data['choices'][0]['message']['content'] as String? ??
-          resultContent;
-      if (queryResult.isEffectivelyEmpty) {
-        await finance.addMessage(aiSummary, true);
-      } else {
-        await finance.addQueryResultMessage(
-          aiSummary: aiSummary,
-          queryResult: queryResult,
-          vizType: vizType,
-          originalQuestion: userText,
-        );
-      }
-      if (isChatExpanded)
-        voice.speak(
-          r.data['choices'][0]['message']['content'] as String? ?? "",
-        );
-    } catch (_) {
-      await finance.addMessage(
-        queryResult.isEffectivelyEmpty
-            ? "Belum ada data."
-            : "Ada ${queryResult.rowCount} data.",
-        true,
-      );
-    }
-  }
-
-  // ==========================================
-  // GENERATE KONFIRMASI
-  // ==========================================
-
-  Future<void> _generateAgentConfirmation({
-    required List<Map<String, dynamic>> toolResults,
-    required Map<String, dynamic> agentMessage,
-    required String userText,
-    required String apiKey,
-    required FinanceProvider finance,
-    required VoiceService voice,
-    required String pendingContext,
-  }) async {
     try {
       final newPendingCtx = await _buildPendingContext(finance);
       final toolResultMessages = toolResults
@@ -889,37 +468,16 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
             },
           )
           .toList();
-
-      final r = await _dio.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        options: Options(headers: {"Authorization": "Bearer $apiKey"}),
-        data: {
-          "model": _agentModel,
-          "messages": [
-            {
-              "role": "system",
-              "content":
-                  "${_buildSystemPrompt(newPendingCtx)}\nBuat respons konfirmasi singkat. Jika ada save_pending, langsung tanyakan yang kurang.",
-            },
-            {"role": "user", "content": userText},
-            {
-              "role": "assistant",
-              "content": agentMessage['content'] ?? "",
-              "tool_calls": agentMessage['tool_calls'],
-            },
-            ...toolResultMessages,
-          ],
-          "tools": agentTools,
-          "tool_choice": "none",
-          "max_tokens": 512,
-        },
+      final sysPrompt = aiService.buildSystemPrompt(newPendingCtx);
+      final confirmation = await aiService.generateConfirmation(
+        sysPrompt,
+        userText,
+        agentMessage,
+        toolResultMessages,
       );
-      final confirmation =
-          r.data['choices'][0]['message']['content'] as String? ?? "Siap!";
       await finance.addMessage(confirmation, true);
       if (isChatExpanded) voice.speak(confirmation);
     } catch (e) {
-      debugPrint("CONFIRM_ERROR: $e");
       final hasPending = toolResults.any(
         (r) => r['tool_name'] == 'save_pending',
       );
@@ -935,15 +493,16 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
         await finance.addMessage("Dicatat! ✓", true);
       }
     }
-  }
 
-  // ==========================================
-  // RESOLVE PENDING DIRECT
-  // ==========================================
+    if (anyRecordSuccess) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _maybeShowFollowUp(finance);
+    }
+  }
 
   Future<void> _executeResolvePending({
     required String userText,
-    required String apiKey,
+    required AiService aiService,
     required FinanceProvider finance,
     required VoiceService voice,
     required int resolvedAmount,
@@ -965,26 +524,13 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
 
     final newCtx = await _buildPendingContext(finance);
     try {
-      final r = await _dio.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        options: Options(headers: {"Authorization": "Bearer $apiKey"}),
-        data: {
-          "model": _agentModel,
-          "messages": [
-            {
-              "role": "system",
-              "content":
-                  "${_buildSystemPrompt(newCtx)}\nKonfirmasi pencatatan singkat.",
-            },
-            {"role": "user", "content": "Dicatat: $nama Rp $resolvedAmount"},
-          ],
-          "tools": agentTools,
-          "tool_choice": "none",
-          "max_tokens": 256,
-        },
+      final sysPrompt = aiService.buildSystemPrompt(newCtx);
+      final aiRes = await aiService.confirmDirectResolve(
+        sysPrompt,
+        nama,
+        resolvedAmount,
       );
-      final aiRes =
-          r.data['choices'][0]['message']['content'] as String? ?? "Dicatat! ✓";
+
       if (newCtx.isNotEmpty) {
         final next = await finance.getOldestPending();
         if (next != null) {
@@ -998,14 +544,9 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
       await finance.addMessage("Dicatat! ✓", true);
     }
 
-    // Cek pending sisa → follow-up
     await Future.delayed(const Duration(milliseconds: 500));
     await _maybeShowFollowUp(finance);
   }
-
-  // ==========================================
-  // FORMAT RUPIAH
-  // ==========================================
 
   String _formatRupiah(int amount) {
     final str = amount.abs().toString();
@@ -1016,10 +557,6 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
     }
     return amount < 0 ? '-${buf.toString()}' : buf.toString();
   }
-
-  // ==========================================
-  // BUILD
-  // ==========================================
 
   @override
   Widget build(BuildContext context) {
@@ -1250,7 +787,7 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
           icon: const Icon(Icons.close),
           onPressed: () => setState(() => isChatExpanded = false),
         ),
-        actions: const [PendingBadge()],
+        actions: const [PendingBadge()], // Memanggil Widget PendingReminderCard
       ),
       body: Column(
         children: [
@@ -1263,22 +800,18 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
                 final m = finance.chatHistory[i];
                 final isAi = m['isAi'] == 1;
 
-                // Query result bubble
                 if (isAi && m.containsKey('queryResult')) {
                   return Align(
                     alignment: Alignment.centerLeft,
                     child: QueryResultCard(
                       aiSummary: m['text'] ?? "",
                       result: m['queryResult'] as RawQueryResult,
-                      vizType: vizTypeFromString(
-                        m['vizType'] as String? ?? 'auto',
-                      ),
+                      vizType: m['vizType'],
                       originalQuestion: m['originalQuestion'] as String? ?? "",
                     ),
                   );
                 }
 
-                // Follow-up bubble dengan tombol Ya/Nanti
                 if (isAi && m['isFollowUp'] == true) {
                   return _buildFollowUpBubble(m['text'] as String, finance);
                 }
@@ -1316,7 +849,6 @@ ${pendingContext.isNotEmpty ? 'INGAT: Ada transaksi tertunda, singgung di akhir.
     );
   }
 
-  /// Bubble follow-up dengan tombol Ya / Nanti
   Widget _buildFollowUpBubble(String message, FinanceProvider finance) {
     return Align(
       alignment: Alignment.centerLeft,

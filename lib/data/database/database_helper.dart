@@ -1,7 +1,3 @@
-/// database_helper.dart
-/// v4: pending_requests diperluas dengan kolom nama, nominal, quantity, datetime
-library;
-
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:flutter/material.dart';
@@ -54,20 +50,16 @@ class DatabaseHelper {
       CREATE TABLE pending_requests (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         original_input TEXT    NOT NULL,
-        -- 2 data WAJIB dari user
         nama           TEXT,
         nominal        INTEGER,
-        -- 2 data OPSIONAL (default jika tidak ada)
         quantity       INTEGER NOT NULL DEFAULT 1,
         input_datetime TEXT    NOT NULL,
-        -- data auto dari AI/sistem
         missing_fields TEXT    NOT NULL DEFAULT '[]',
         partial_data   TEXT    NOT NULL DEFAULT '{}',
         ai_question    TEXT    NOT NULL DEFAULT '',
         reason         TEXT    NOT NULL DEFAULT '',
         category       TEXT    NOT NULL DEFAULT 'Other',
         type           TEXT    NOT NULL DEFAULT 'OUT',
-        -- status & waktu
         created_at     TEXT    NOT NULL,
         status         TEXT    NOT NULL DEFAULT 'pending',
         follow_up_shown INTEGER NOT NULL DEFAULT 0
@@ -107,7 +99,6 @@ class DatabaseHelper {
       debugPrint("DB_UPGRADE v3");
     }
     if (oldVersion < 4) {
-      // Tambah kolom baru ke tabel pending_requests yang sudah ada
       final cols = [
         "ALTER TABLE pending_requests ADD COLUMN nama TEXT",
         "ALTER TABLE pending_requests ADD COLUMN nominal INTEGER",
@@ -122,17 +113,12 @@ class DatabaseHelper {
           await db.execute(sql);
         } catch (_) {}
       }
-      // Isi input_datetime untuk data lama
       await db.execute(
         "UPDATE pending_requests SET input_datetime = created_at WHERE input_datetime IS NULL",
       );
       debugPrint("DB_UPGRADE v4: pending_requests diperluas");
     }
   }
-
-  // ==========================================
-  // TRANSACTIONS
-  // ==========================================
 
   Future<int> addTransaction(
     int amount,
@@ -162,10 +148,6 @@ class DatabaseHelper {
     return await db.delete('transactions', where: 'id = ?', whereArgs: [id]);
   }
 
-  // ==========================================
-  // MESSAGES
-  // ==========================================
-
   Future<int> insertMessage(
     String text,
     bool isAi, {
@@ -186,10 +168,6 @@ class DatabaseHelper {
     return await db.query('messages', orderBy: 'id DESC', limit: limit);
   }
 
-  // ==========================================
-  // RAW SELECT
-  // ==========================================
-
   Future<RawQueryResult> rawSelect(String validatedSql) async {
     final db = await instance.database;
     try {
@@ -205,10 +183,6 @@ class DatabaseHelper {
     }
   }
 
-  // ==========================================
-  // CLEAR ALL
-  // ==========================================
-
   Future<void> clearAllData() async {
     final db = await instance.database;
     await db.delete('transactions');
@@ -216,10 +190,6 @@ class DatabaseHelper {
     await db.delete('pending_requests');
   }
 }
-
-// ==========================================
-// MODEL: RawQueryResult
-// ==========================================
 
 class RawQueryResult {
   final List<String> columns;

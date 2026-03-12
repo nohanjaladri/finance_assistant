@@ -7,7 +7,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
-import '../logic/database_helper.dart';
+import '../../data/database/database_helper.dart';
 
 // ==========================================
 // ENUM TIPE VISUALISASI

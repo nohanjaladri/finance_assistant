@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-import 'logic/voice_service.dart';
-import 'logic/finance_provider.dart';
-import 'home_screen.dart';
+// --- IMPORT DENGAN STRUKTUR CLEAN ARCHITECTURE ---
+import 'data/services/voice_service.dart';
+import 'presentation/providers/finance_provider.dart';
+import 'presentation/screens/home_screen.dart';
+// -------------------------------------------------
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();

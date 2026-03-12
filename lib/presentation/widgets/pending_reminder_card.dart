@@ -5,8 +5,8 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../logic/finance_provider.dart';
-import '../logic/pending_request_helper.dart';
+import '../providers/finance_provider.dart';
+import '../../data/database/pending_request_helper.dart';
 
 // ==========================================
 // BADGE
