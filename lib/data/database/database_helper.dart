@@ -18,7 +18,7 @@ class DatabaseHelper {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 4,
+      version: 5, // UPGRADE VERSION
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -38,11 +38,12 @@ class DatabaseHelper {
 
     await db.execute('''
       CREATE TABLE messages (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        text       TEXT NOT NULL,
-        isAi       INTEGER NOT NULL,
-        confirmMsg TEXT,
-        confirmCmd TEXT
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        text        TEXT NOT NULL,
+        isAi        INTEGER NOT NULL,
+        confirmMsg  TEXT,
+        confirmCmd  TEXT,
+        receiptData TEXT
       )
     ''');
 
@@ -115,6 +116,11 @@ class DatabaseHelper {
         "UPDATE pending_requests SET input_datetime = created_at WHERE input_datetime IS NULL",
       );
     }
+    if (oldVersion < 5) {
+      try {
+        await db.execute("ALTER TABLE messages ADD COLUMN receiptData TEXT");
+      } catch (_) {}
+    }
   }
 
   Future<int> addTransaction(
@@ -134,12 +140,10 @@ class DatabaseHelper {
     return id;
   }
 
-  // --- FUNGSI BARU UNTUK UPDATE TRANSAKSI ---
   Future<int> updateTransaction(int id, int amount, String? note) async {
     final db = await instance.database;
     final Map<String, dynamic> data = {'amount': amount};
     if (note != null && note.isNotEmpty) data['note'] = note;
-
     return await db.update(
       'transactions',
       data,
@@ -147,7 +151,6 @@ class DatabaseHelper {
       whereArgs: [id],
     );
   }
-  // ------------------------------------------
 
   Future<List<Map<String, dynamic>>> getAllTransactions() async {
     final db = await instance.database;
@@ -159,11 +162,13 @@ class DatabaseHelper {
     return await db.delete('transactions', where: 'id = ?', whereArgs: [id]);
   }
 
+  // UPDATE FUNGSI INI: Menambahkan parameter receiptData
   Future<int> insertMessage(
     String text,
     bool isAi, {
     String? confirmMsg,
     String? confirmCmd,
+    String? receiptData,
   }) async {
     final db = await instance.database;
     return await db.insert('messages', {
@@ -171,6 +176,7 @@ class DatabaseHelper {
       'isAi': isAi ? 1 : 0,
       'confirmMsg': confirmMsg,
       'confirmCmd': confirmCmd,
+      'receiptData': receiptData,
     });
   }
 
