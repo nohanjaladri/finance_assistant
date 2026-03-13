@@ -13,6 +13,7 @@ import '../../data/services/voice_service.dart';
 import '../providers/finance_provider.dart';
 import '../widgets/query_result_card.dart';
 import '../widgets/pending_reminder_card.dart';
+import 'database_view_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -35,7 +36,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // SNACKBAR ERROR HELPER
   void _showErrorSnackBar(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -200,7 +200,6 @@ class _HomeScreenState extends State<HomeScreen> {
       if (isDirectlyResolving &&
           userAmountFallback != null &&
           activePendingSnapshot != null) {
-        debugPrint("[HomeScreen] _processMessage: Mode Direct Resolve Aktif");
         await _executeResolvePending(
           userText: userText,
           aiService: aiService,
@@ -228,18 +227,12 @@ class _HomeScreenState extends State<HomeScreen> {
         {"role": "user", "content": userText},
       ];
 
-      debugPrint(
-        "[HomeScreen] _processMessage: Mengirim request ke API Groq...",
-      );
       final agentResponse = await aiService.sendAgentMessage(messages);
       final choice = agentResponse.data['choices'][0];
       final message = choice['message'];
       final toolCalls = message['tool_calls'] as List<dynamic>?;
 
       if (toolCalls != null && toolCalls.isNotEmpty) {
-        debugPrint(
-          "[HomeScreen] _processMessage: Ditemukan ${toolCalls.length} panggilan tool.",
-        );
         await _executeToolCalls(
           toolCalls: toolCalls,
           agentMessage: message,
@@ -248,9 +241,9 @@ class _HomeScreenState extends State<HomeScreen> {
           finance: finance,
           voice: voice,
           pendingContext: pendingContext,
+          userAmountFallback: userAmountFallback,
         );
       } else {
-        debugPrint("[HomeScreen] _processMessage: Respon berupa teks biasa.");
         final content = message['content'] as String? ?? "";
         await finance.addMessage(content, true);
         if (isChatExpanded) voice.speak(content);
@@ -276,12 +269,13 @@ class _HomeScreenState extends State<HomeScreen> {
     required FinanceProvider finance,
     required VoiceService voice,
     required String pendingContext,
+    int? userAmountFallback,
   }) async {
     final toolResults = <Map<String, dynamic>>[];
     bool anyRecordSuccess = false;
 
     for (final call in toolCalls) {
-      final toolName = call['function']['name'] as String;
+      String toolName = call['function']['name'] as String;
       final toolCallId = call['id'] as String;
       Map<String, dynamic> args = {};
       try {
@@ -289,32 +283,42 @@ class _HomeScreenState extends State<HomeScreen> {
         args =
             jsonDecode(raw is String ? raw : jsonEncode(raw))
                 as Map<String, dynamic>;
-        debugPrint(
-          "[HomeScreen] _executeToolCalls: Mengeksekusi $toolName dengan argumen $args",
-        );
       } catch (e) {
         debugPrint("[HomeScreen] TOOL_ARG_PARSE_ERROR: $e");
-        _showErrorSnackBar("Format argumen dari AI tidak valid.");
+      }
+
+      if (toolName == "record_transaction") {
+        int checkAmount = 0;
+        if (args['amount'] != null)
+          checkAmount =
+              int.tryParse(
+                AmountParser.cleanNumberString(args['amount'].toString()),
+              ) ??
+              0;
+
+        if (userAmountFallback == null && checkAmount > 0) {
+          debugPrint(
+            "[HomeScreen] INTERCEPT: AI berhalusinasi mengarang harga $checkAmount! Mengalihkan ke Pending.",
+          );
+          toolName = "save_pending";
+          args['partial_note'] = args['note'];
+          args['partial_type'] = args['type'];
+          args['partial_category'] = args['category'];
+          args['amount'] = null;
+        }
       }
 
       String result = "";
       if (toolName == "record_transaction") {
         int finalAmount = 0;
         if (args['amount'] != null) {
-          // PENGAMAN (BACKUP PARSER): Membersihkan karakter non-angka (seperti Rp, titik, atau koma)
           String rawAmount = args['amount'].toString();
           String cleanedAmount = AmountParser.cleanNumberString(rawAmount);
           finalAmount = int.tryParse(cleanedAmount) ?? 0;
-          debugPrint(
-            "[HomeScreen] record_transaction: Ekstraksi angka (Raw: $rawAmount -> Cleaned: $cleanedAmount -> Final: $finalAmount)",
-          );
         }
 
         if (finalAmount <= 0) {
           result = "error: amount tidak valid atau tidak disebutkan";
-          debugPrint(
-            "[HomeScreen] record_transaction: Gagal karena finalAmount <= 0",
-          );
         } else {
           final note = args['note'] as String? ?? "Transaksi";
           final type = (args['type'] as String? ?? 'OUT').toUpperCase();
@@ -328,7 +332,6 @@ class _HomeScreenState extends State<HomeScreen> {
             anyRecordSuccess = true;
           } catch (e) {
             result = "error_database: gagal menyimpan ke lokal";
-            _showErrorSnackBar("Gagal menyimpan transaksi ke database.");
           }
         }
       } else if (toolName == "save_pending") {
@@ -343,24 +346,33 @@ class _HomeScreenState extends State<HomeScreen> {
         int? aiAmount;
         if (args['amount'] != null) {
           String rawAmount = args['amount'].toString();
-          String cleanedAmount = AmountParser.cleanNumberString(rawAmount);
-          aiAmount = int.tryParse(cleanedAmount);
+          aiAmount = int.tryParse(AmountParser.cleanNumberString(rawAmount));
         }
 
         final nama = (partialNote != originalInput && partialNote.isNotEmpty)
             ? partialNote
             : null;
         final missing = <String>[];
-        if (nama == null) missing.add('nama');
-        if (aiAmount == null) missing.add('nominal');
+
+        String dynamicQuestion = "Informasi belum lengkap.";
+        if (nama == null && aiAmount == null) {
+          dynamicQuestion = "Tolong sebutkan nama/barang dan harganya ya.";
+          missing.addAll(['nama', 'nominal']);
+        } else if (nama == null) {
+          dynamicQuestion =
+              "Tolong sebutkan nama atau keterangan transaksinya.";
+          missing.add('nama');
+        } else if (aiAmount == null) {
+          dynamicQuestion = "Berapa nominal/harganya?";
+          missing.add('nominal');
+        }
 
         try {
           await finance.savePendingRequestNew(
             originalInput: originalInput,
             nama: nama,
             nominal: aiAmount,
-            aiQuestion:
-                "Informasi belum lengkap. Tolong sebutkan nama dan nominalnya.",
+            aiQuestion: dynamicQuestion,
             reason: reason,
             category: partialCategory,
             type: partialType,
@@ -371,38 +383,30 @@ class _HomeScreenState extends State<HomeScreen> {
               'category': partialCategory,
             },
           );
-          result =
-              "saved_silently: Data berhasil dimasukkan ke antrean pending.";
+          result = "saved_silently: Data dimasukkan ke antrean pending.";
         } catch (e) {
           result = "error_database: gagal save pending";
-          _showErrorSnackBar("Gagal menyimpan ke antrean pending.");
         }
       } else if (toolName == "update_transaction") {
         final id = int.tryParse(args['id'].toString()) ?? -1;
-
         int newAmount = 0;
         if (args['new_amount'] != null) {
-          String rawAmount = args['new_amount'].toString();
-          String cleanedAmount = AmountParser.cleanNumberString(rawAmount);
-          newAmount = int.tryParse(cleanedAmount) ?? 0;
+          newAmount =
+              int.tryParse(
+                AmountParser.cleanNumberString(args['new_amount'].toString()),
+              ) ??
+              0;
         }
-
         final newNote = args['new_note'] as String?;
 
         if (id != -1 && newAmount > 0) {
-          try {
-            await DatabaseHelper.instance.updateTransaction(
-              id,
-              newAmount,
-              newNote,
-            );
-            await finance.refreshData();
-            result =
-                "success_update: Transaksi ID $id berhasil diperbarui menjadi Rp $newAmount.";
-          } catch (e) {
-            result = "error_database: Gagal memperbarui transaksi";
-            _showErrorSnackBar("Gagal memperbarui transaksi di database.");
-          }
+          await DatabaseHelper.instance.updateTransaction(
+            id,
+            newAmount,
+            newNote,
+          );
+          await finance.refreshData();
+          result = "success_update: Transaksi diperbarui.";
         } else {
           result = "error: ID tidak ditemukan atau amount tidak valid.";
         }
@@ -424,13 +428,42 @@ class _HomeScreenState extends State<HomeScreen> {
     if (hasPending) {
       final msg = anyRecordSuccess
           ? "Sebagian dicatat, sisanya masuk antrean pending ✓"
-          : "Dicatat di antrean pending ✓";
+          : "Data yang kurang masuk antrean pending ✓";
       await finance.addMessage(msg, true);
 
       if (isChatExpanded)
         voice.speak(
           anyRecordSuccess ? "Masuk pending sebagian" : "Masuk pending",
         );
+      return;
+    }
+
+    final hasUpdate = toolResults.any(
+      (r) => r['tool_name'] == 'update_transaction',
+    );
+    if (hasUpdate) {
+      try {
+        final toolResultMessages = toolResults
+            .map(
+              (r) => {
+                "role": "tool",
+                "tool_call_id": r['tool_call_id'],
+                "content": r['result'] as String,
+              },
+            )
+            .toList();
+        final sysPrompt = aiService.buildSystemPrompt(pendingContext);
+        final confirmation = await aiService.generateConfirmation(
+          sysPrompt,
+          userText,
+          agentMessage,
+          toolResultMessages,
+        );
+        await finance.addMessage(confirmation, true);
+        if (isChatExpanded) voice.speak(confirmation);
+      } catch (_) {
+        await finance.addMessage("Data berhasil diperbarui! ✓", true);
+      }
       return;
     }
 
@@ -449,9 +482,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final validation = QueryValidator.validate(sql);
       if (!validation.isValid) {
-        _showErrorSnackBar(
-          "Query diblokir: Sistem mendeteksi query yang berpotensi merusak data.",
-        );
         await finance.addMessage(
           "Query tidak valid: ${validation.errorMessage}",
           true,
@@ -464,7 +494,6 @@ class _HomeScreenState extends State<HomeScreen> {
           validation.sanitizedQuery!,
         );
         if (!queryResult.isSuccess) {
-          _showErrorSnackBar("Gagal mengeksekusi pencarian data di database.");
           await finance.addMessage("Gagal mengambil data.", true);
           return;
         }
@@ -482,7 +511,10 @@ class _HomeScreenState extends State<HomeScreen> {
           resultContent,
         );
 
-        if (queryResult.isEffectivelyEmpty) {
+        final isSimpleAggregate =
+            (queryResult.rows.length == 1 && queryResult.columns.length <= 2);
+
+        if (queryResult.isEffectivelyEmpty || isSimpleAggregate) {
           await finance.addMessage(aiSummary, true);
         } else {
           await finance.addQueryResultMessage(
@@ -492,6 +524,7 @@ class _HomeScreenState extends State<HomeScreen> {
             originalQuestion: userText,
           );
         }
+
         if (isChatExpanded) voice.speak(aiSummary);
       } catch (e) {
         debugPrint("[HomeScreen] _executeToolCalls: Error saat query -> $e");
@@ -533,10 +566,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await finance.addMessage(confirmation, true);
       if (isChatExpanded) voice.speak(confirmation);
     } catch (e) {
-      debugPrint(
-        "[HomeScreen] _executeToolCalls: Konfirmasi AI gagal, mencetak konfirmasi lokal.",
-      );
-      await finance.addMessage("Proses Selesai! ✓", true);
+      await finance.addMessage("Dicatat! ✓", true);
     }
   }
 
@@ -652,10 +682,40 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               _buildChart(finance),
               const SizedBox(height: 20),
-              const Text(
-                "Histori Transaksi",
-                style: TextStyle(color: Colors.grey),
+
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    "Histori Transaksi",
+                    style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        // KATA KUNCI 'const' DIHAPUS DI SINI
+                        MaterialPageRoute(
+                          builder: (context) => DatabaseViewScreen(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(
+                      Icons.table_chart,
+                      size: 16,
+                      color: Colors.deepPurple,
+                    ),
+                    label: const Text(
+                      "Lihat Semua Data",
+                      style: TextStyle(fontSize: 12, color: Colors.deepPurple),
+                    ),
+                  ),
+                ],
               ),
+
               _buildHistoryList(finance),
               const SizedBox(height: 100),
             ],
