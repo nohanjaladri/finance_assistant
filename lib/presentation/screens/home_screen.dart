@@ -15,7 +15,7 @@ import '../providers/finance_provider.dart';
 import '../widgets/query_result_card.dart';
 import '../widgets/pending_reminder_card.dart';
 import '../widgets/receipt_card.dart';
-import 'database_view_screen.dart';
+import 'transaction_history_screen.dart';
 
 class AnimatedThinkingBubble extends StatefulWidget {
   const AnimatedThinkingBubble({super.key});
@@ -297,7 +297,6 @@ class _HomeScreenState extends State<HomeScreen> {
     bool intercepted = false;
     List<String> interactiveQuestions = [];
 
-    // --- PENCEGAH BUG DOUBLE RECORDING ---
     Set<String> processedSignatures = {};
 
     for (final call in toolCalls) {
@@ -343,7 +342,6 @@ class _HomeScreenState extends State<HomeScreen> {
         final note = args['note'] as String? ?? "Transaksi";
 
         if (finalAmount > 0) {
-          // CEK SIDIK JARI AGAR TIDAK DOUBLE
           String sig = "${note.toLowerCase()}_$finalAmount";
           if (!processedSignatures.contains(sig)) {
             processedSignatures.add(sig);
@@ -361,8 +359,7 @@ class _HomeScreenState extends State<HomeScreen> {
               });
             } catch (_) {}
           } else {
-            result =
-                "skipped_duplicate"; // Abaikan jika ini duplikat dari update_pending
+            result = "skipped_duplicate";
           }
         }
       } else if (toolName == "create_pending_state") {
@@ -430,7 +427,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   'type': "OUT",
                 });
               }
-              // Wajib selesaikan pending walaupun itu duplikat
               await finance.completePending(pId);
               result = "resolved";
             } catch (_) {}
@@ -563,34 +559,28 @@ class _HomeScreenState extends State<HomeScreen> {
       await finance.addMessage("RECEIPT_DATA", true, receiptData: jsonStr);
     }
 
-    // --- ALGORITMA INFINITE LOOP FLUTTER ---
     final clarifyTool = toolResults
         .where((r) => r['tool_name'] == 'ask_clarification')
         .firstOrNull;
     final remainingPendings = await finance.getAllPending();
 
     if (clarifyTool != null) {
-      // 1. Paling Prioritas: Jika AI kebingungan, tanya dulu ke user
       final q =
           clarifyTool['args']['question'] as String? ??
           "Bisa diperjelas lagi maksudnya?";
       await finance.addMessage(q, true);
       if (isChatExpanded) voice.speak(q);
     } else if (interactiveQuestions.isNotEmpty) {
-      // 2. Pertanyaan baru dari AI (dari create_pending atau update_pending yang belum selesai)
       await finance.addMessage(interactiveQuestions.join("\n"), true);
       if (isChatExpanded && recordedTxs.isEmpty)
         voice.speak("Mohon lengkapi datanya.");
     } else if (intercepted) {
-      // 3. Fallback pencegah halusinasi
       await finance.addMessage("Berapa nominal/harganya?", true);
     } else if (remainingPendings.isNotEmpty) {
-      // 4. THE MAGIC LOOP: Jika AI diam saja, tapi DB bilang MASIH ADA antrean, Flutter yang akan memaksa menanyakannya!
       String nextQ = remainingPendings.first.aiQuestion;
       await finance.addMessage("Masih ada yang tertunda:\n$nextQ", true);
       if (isChatExpanded) voice.speak("Masih ada transaksi tertunda.");
     } else if (recordedTxs.isNotEmpty) {
-      // 5. Semuanya bersih, no antrean!
       if (isChatExpanded) voice.speak("Semua transaksi berhasil dicatat");
     } else if (!hasUpdate && !hasCancel) {
       await finance.addMessage("Proses Selesai! ✓", true);
@@ -605,6 +595,82 @@ class _HomeScreenState extends State<HomeScreen> {
       buf.write(str[i]);
     }
     return buf.toString();
+  }
+
+  String _compactNumber(double value) {
+    if (value >= 1000000) {
+      return '${(value / 1000000).toStringAsFixed(1).replaceAll('.0', '')}M';
+    } else if (value >= 1000) {
+      return '${(value / 1000).toStringAsFixed(0)}K';
+    }
+    return value.toInt().toString();
+  }
+
+  // --- HELPER IKON BARU (SINKRONISASI KE DASBOR) ---
+  IconData _getCategoryIcon(String category) {
+    switch (category) {
+      case 'Food':
+        return Icons.restaurant;
+      case 'Groceries':
+        return Icons.local_grocery_store;
+      case 'Transport':
+        return Icons.two_wheeler;
+      case 'Shopping':
+        return Icons.shopping_bag;
+      case 'Health':
+        return Icons.medical_services;
+      case 'Entertainment':
+        return Icons.sports_esports;
+      case 'Bills':
+        return Icons.receipt;
+      case 'EWallet':
+        return Icons.account_balance_wallet;
+      case 'Education':
+        return Icons.school;
+      case 'Charity':
+        return Icons.volunteer_activism;
+      case 'Investment':
+        return Icons.trending_up;
+      case 'Salary':
+        return Icons.payments;
+      case 'Business':
+        return Icons.store;
+      case 'Transfer_In':
+        return Icons.south_west;
+      case 'Transfer_Out':
+        return Icons.north_east;
+      default:
+        return Icons.category;
+    }
+  }
+
+  String _formatDateForTile(String isoDate) {
+    if (isoDate.isEmpty) return "Waktu tidak diketahui";
+    try {
+      final date = DateTime.parse(isoDate).toLocal();
+      final months = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'Mei',
+        'Jun',
+        'Jul',
+        'Ags',
+        'Sep',
+        'Okt',
+        'Nov',
+        'Des',
+      ];
+      final day = date.day.toString().padLeft(2, '0');
+      final month = months[date.month - 1];
+      final year = date.year;
+      final hh = date.hour.toString().padLeft(2, '0');
+      final mm = date.minute.toString().padLeft(2, '0');
+      return "$day $month $year • $hh:$mm";
+    } catch (_) {
+      return isoDate;
+    }
   }
 
   @override
@@ -666,11 +732,14 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildBalanceCard(finance),
               const SizedBox(height: 30),
               const Text(
-                "Analisis Dana",
+                "Analisis 7 Hari Terakhir",
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
-              _buildChart(finance),
               const SizedBox(height: 20),
+
+              _buildChart(finance),
+
+              const SizedBox(height: 25),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -681,21 +750,20 @@ class _HomeScreenState extends State<HomeScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  TextButton.icon(
+                  TextButton(
                     onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => const DatabaseViewScreen(),
+                        builder: (context) => const TransactionHistoryScreen(),
                       ),
                     ),
-                    icon: const Icon(
-                      Icons.table_chart,
-                      size: 16,
-                      color: Colors.deepPurple,
-                    ),
-                    label: const Text(
-                      "Lihat Semua Data",
-                      style: TextStyle(fontSize: 12, color: Colors.deepPurple),
+                    child: const Text(
+                      "Lihat Semua",
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.deepPurple,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ],
@@ -754,53 +822,239 @@ class _HomeScreenState extends State<HomeScreen> {
   );
 
   Widget _buildChart(FinanceProvider finance) {
-    return SizedBox(
-      height: 200,
-      child: (finance.totalIn == 0 && finance.totalOut == 0)
-          ? const Center(child: Text("Belum ada data"))
-          : PieChart(
-              PieChartData(
-                sections: [
-                  PieChartSectionData(
-                    value: finance.totalIn.toDouble(),
-                    color: Colors.teal,
-                    title: 'IN',
-                  ),
-                  PieChartSectionData(
-                    value: finance.totalOut.toDouble(),
-                    color: Colors.orange,
-                    title: 'OUT',
-                  ),
-                ],
+    if (finance.history.isEmpty) {
+      return const SizedBox(
+        height: 200,
+        child: Center(child: Text("Belum ada data untuk ditampilkan")),
+      );
+    }
+
+    final now = DateTime.now();
+    final justToday = DateTime(now.year, now.month, now.day);
+
+    List<double> inData = List.filled(7, 0.0);
+    List<double> outData = List.filled(7, 0.0);
+    List<String> xLabels = List.filled(7, '');
+
+    for (int i = 0; i < 7; i++) {
+      final targetDate = justToday.subtract(Duration(days: 6 - i));
+      xLabels[i] = "${targetDate.day}/${targetDate.month}";
+    }
+
+    double maxY = 0;
+
+    for (var tx in finance.history) {
+      final dateStr = tx['date'] as String?;
+      if (dateStr == null) continue;
+      final txDate = DateTime.tryParse(dateStr)?.toLocal();
+      if (txDate == null) continue;
+
+      final justTx = DateTime(txDate.year, txDate.month, txDate.day);
+      final diff = justToday.difference(justTx).inDays;
+
+      if (diff >= 0 && diff <= 6) {
+        final index = 6 - diff;
+        final amt = (tx['amount'] as int).toDouble();
+        if (tx['type'] == 'OUT') {
+          outData[index] += amt;
+        } else {
+          inData[index] += amt;
+        }
+      }
+    }
+
+    for (var val in inData) if (val > maxY) maxY = val;
+    for (var val in outData) if (val > maxY) maxY = val;
+
+    maxY = maxY > 0 ? maxY * 1.2 : 1000;
+
+    List<BarChartGroupData> barGroups = [];
+    for (int i = 0; i < 7; i++) {
+      barGroups.add(
+        BarChartGroupData(
+          x: i,
+          barsSpace: 4,
+          barRods: [
+            BarChartRodData(
+              toY: inData[i],
+              color: Colors.teal,
+              width: 10,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            BarChartRodData(
+              toY: outData[i],
+              color: Colors.orange,
+              width: 10,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      height: 220,
+      padding: const EdgeInsets.only(right: 15, left: 0),
+      child: BarChart(
+        BarChartData(
+          alignment: BarChartAlignment.spaceAround,
+          maxY: maxY,
+          barTouchData: BarTouchData(enabled: false),
+          titlesData: FlTitlesData(
+            show: true,
+            topTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            rightTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 28,
+                getTitlesWidget: (value, meta) {
+                  final idx = value.toInt();
+                  if (idx >= 0 && idx < 7) {
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        xLabels[idx],
+                        style: const TextStyle(
+                          color: Colors.grey,
+                          fontSize: 10,
+                        ),
+                      ),
+                    );
+                  }
+                  return const Text('');
+                },
               ),
             ),
+            leftTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 40,
+                interval: maxY / 4 == 0 ? 1 : maxY / 4,
+                getTitlesWidget: (value, meta) {
+                  if (value == 0) return const SizedBox.shrink();
+                  return Text(
+                    _compactNumber(value),
+                    style: const TextStyle(color: Colors.grey, fontSize: 10),
+                  );
+                },
+              ),
+            ),
+          ),
+          borderData: FlBorderData(show: false),
+          gridData: FlGridData(
+            show: true,
+            drawVerticalLine: false,
+            horizontalInterval: maxY / 4 == 0 ? 1 : maxY / 4,
+            getDrawingHorizontalLine: (value) =>
+                FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+          ),
+          barGroups: barGroups,
+        ),
+      ),
     );
   }
 
   Widget _buildHistoryList(FinanceProvider finance) {
+    final latestTransactions = finance.history.take(5).toList();
+
+    if (latestTransactions.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 20),
+        child: Center(
+          child: Text("Belum ada data", style: TextStyle(color: Colors.grey)),
+        ),
+      );
+    }
+
     return ListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      itemCount: finance.history.length,
+      itemCount: latestTransactions.length,
       itemBuilder: (context, i) {
-        final item = finance.history[i];
+        final item = latestTransactions[i];
         final isIn = item['type'] == 'IN';
-        return ListTile(
-          leading: Icon(
-            isIn ? Icons.add_circle : Icons.remove_circle,
-            color: isIn ? Colors.teal : Colors.orange,
-          ),
-          title: Text(item['note'] ?? ""),
-          subtitle: Text(
-            item['category'] ?? "",
-            style: const TextStyle(fontSize: 11, color: Colors.grey),
-          ),
-          trailing: Text(
-            (isIn ? "Rp " : "-Rp ") + _formatRupiah(item['amount'] as int),
-            style: TextStyle(
-              color: isIn ? Colors.teal : Colors.red,
-              fontWeight: FontWeight.bold,
-            ),
+        final amountColor = isIn ? Colors.green : Colors.red;
+        final amountPrefix = isIn ? "Rp" : "-Rp";
+        final arrowIcon = isIn ? Icons.arrow_upward : Icons.arrow_downward;
+        final note = item['note']?.toString() ?? 'Transaksi';
+        final category = item['category']?.toString() ?? 'Other';
+        final dateStr = item['date']?.toString() ?? '';
+        final amount = item['amount'] as int? ?? 0;
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 20),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 45,
+                height: 45,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.shade300, width: 1),
+                ),
+                child: Icon(
+                  _getCategoryIcon(category),
+                  color: Colors.black87,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      note,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 15,
+                        color: Colors.black87,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _formatDateForTile(dateStr),
+                      style: TextStyle(
+                        color: Colors.grey.shade500,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    "$amountPrefix${_formatRupiah(amount)}",
+                    style: TextStyle(
+                      color: amountColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: amountColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Icon(arrowIcon, color: amountColor, size: 12),
+                  ),
+                ],
+              ),
+            ],
           ),
         );
       },
