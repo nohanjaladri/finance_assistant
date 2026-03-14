@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../data/database/database_helper.dart';
 import '../../data/database/pending_request_helper.dart';
@@ -54,7 +55,6 @@ class FinanceProvider extends ChangeNotifier {
     await refreshData();
   }
 
-  // UPDATE FUNGSI INI
   Future<void> addMessage(String text, bool isAi, {String? receiptData}) async {
     await DatabaseHelper.instance.insertMessage(
       text,
@@ -82,30 +82,8 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> savePendingRequest({
-    required String originalInput,
-    required List<String> missingFields,
-    required Map<String, dynamic> partialData,
-    required String aiQuestion,
-    required String reason,
-  }) async {
-    await PendingRequestHelper.instance.savePending(
-      originalInput: originalInput,
-      missingFields: missingFields,
-      partialData: partialData,
-      aiQuestion: aiQuestion,
-      reason: reason,
-    );
-    await _syncPendingCount();
-    notifyListeners();
-  }
-
   Future<List<PendingRequest>> getAllPending() async {
     return PendingRequestHelper.instance.getAllPending();
-  }
-
-  Future<PendingRequest?> getOldestPending() async {
-    return PendingRequestHelper.instance.getOldestPending();
   }
 
   Future<void> completePending(int pendingId) async {
@@ -117,6 +95,7 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // --- FUNGSI YANG DIKEMBALIKAN ---
   Future<void> cancelPending(int pendingId) async {
     await PendingRequestHelper.instance.cancelPending(pendingId);
     if (activeResolvingPending?.id == pendingId) activeResolvingPending = null;
@@ -125,6 +104,7 @@ class FinanceProvider extends ChangeNotifier {
     await _syncPendingCount();
     notifyListeners();
   }
+  // --------------------------------
 
   void setActiveResolvingPending(PendingRequest? pending) {
     activeResolvingPending = pending;
@@ -178,6 +158,26 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> updatePendingState(
+    int id,
+    String? nama,
+    int? nominal,
+    String missingFieldsJson,
+    String aiQuestion,
+  ) async {
+    final db = await DatabaseHelper.instance.database;
+    Map<String, dynamic> data = {
+      'missing_fields': missingFieldsJson,
+      'ai_question': aiQuestion,
+    };
+    if (nama != null && nama.isNotEmpty) data['nama'] = nama;
+    if (nominal != null && nominal > 0) data['nominal'] = nominal;
+
+    await db.update('pending_requests', data, where: 'id = ?', whereArgs: [id]);
+    await _syncPendingCount();
+    notifyListeners();
+  }
+
   Future<RawQueryResult> executeQuery(String validatedSql) {
     return DatabaseHelper.instance.rawSelect(validatedSql);
   }
@@ -192,11 +192,6 @@ class FinanceProvider extends ChangeNotifier {
     activeResolvingPending = null;
     pendingToFollowUp = null;
     isWaitingDirectReply = false;
-    await refreshData();
-  }
-
-  Future<void> deleteTx(int id) async {
-    await DatabaseHelper.instance.deleteTransaction(id);
     await refreshData();
   }
 }

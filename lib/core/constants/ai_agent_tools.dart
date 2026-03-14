@@ -3,41 +3,21 @@ const List<Map<String, dynamic>> agentTools = [
     "type": "function",
     "function": {
       "name": "record_transaction",
-      "description": """Catat transaksi keuangan ke database.
-Gunakan tool ini HANYA jika nominal/amount eksplisit disebutkan user.
-PENTING: Jika ada beberapa transaksi (campuran pemasukan dan pengeluaran), WAJIB panggil tool ini berkali-kali secara terpisah untuk tiap item. JANGAN HANYA MEMBALAS DENGAN TEKS.""",
+      "description": """HANYA UNTUK TRANSAKSI BARU YANG LENGKAP. 
+DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kamu sedang membahas transaksi tertunda, gunakan `update_pending_state` saja!""",
       "parameters": {
         "type": "object",
         "properties": {
-          "note": {
-            "type": "string",
-            "description":
-                "Deskripsi transaksi, contoh: 'Gaji bulanan', 'Makan siang', 'Ojek ke kantor'",
-          },
+          "note": {"type": "string"},
           "amount": {
             "type": "string",
-            "description":
-                "Nominal uang MURNI ANGKA TANPA TITIK/KOMA dikirim sebagai teks. CONTOH BENAR: '15000'. CONTOH SALAH: '15.000' atau 'Rp15000'.",
+            "description": "Nominal murni angka. Contoh: '15000'.",
           },
           "type": {
             "type": "string",
             "enum": ["IN", "OUT"],
-            "description": "IN untuk pemasukan, OUT untuk pengeluaran",
           },
-          "category": {
-            "type": "string",
-            "enum": [
-              "Food",
-              "Transport",
-              "Shopping",
-              "Health",
-              "Entertainment",
-              "Salary",
-              "Business",
-              "Other",
-            ],
-            "description": "Kategori terbaik berdasarkan konteks transaksi",
-          },
+          "category": {"type": "string"},
         },
         "required": ["note", "amount", "type", "category"],
       },
@@ -46,51 +26,53 @@ PENTING: Jika ada beberapa transaksi (campuran pemasukan dan pengeluaran), WAJIB
   {
     "type": "function",
     "function": {
-      "name": "save_pending",
-      "description": """Simpan transaksi yang belum lengkap ke antrian pending.
-Gunakan tool ini ketika input transaksi tidak memiliki nominal/amount atau nama.
-PENTING: JANGAN bertanya kepada user. Cukup konfirmasi singkat bahwa data telah dimasukkan ke antrean pending.""",
+      "name": "create_pending_state",
+      "description":
+          """FASE 1 (INISIASI): Gunakan jika input BARU dari user tidak lengkap (misal harga kosong). Buat status pending di database.""",
       "parameters": {
         "type": "object",
         "properties": {
-          "original_input": {
-            "type": "string",
-            "description": "Input asli dari user",
-          },
+          "partial_note": {"type": "string"},
+          "partial_amount": {"type": "string"},
           "missing_fields": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Field yang kurang, contoh: ['amount', 'category']",
+            "description": "Contoh: ['amount'] atau ['note']",
           },
-          "partial_note": {
-            "type": "string",
-            "description": "Deskripsi transaksi dari konteks yang ada",
-          },
-          "amount": {
+          "ai_generated_question": {
             "type": "string",
             "description":
-                "Nominal uang MURNI ANGKA TANPA TITIK/KOMA dikirim sebagai teks. CONTOH BENAR: '15000'. Biarkan kosong jika nominal yang kurang.",
-          },
-          "partial_type": {
-            "type": "string",
-            "enum": ["IN", "OUT", "UNKNOWN"],
-            "description": "Tipe transaksi jika sudah bisa ditebak",
-          },
-          "partial_category": {
-            "type": "string",
-            "description":
-                "Kategori jika sudah bisa ditebak, kosong jika tidak tahu",
-          },
-          "reason": {
-            "type": "string",
-            "description": "Alasan kenapa disimpan sebagai pending",
+                "Pertanyaan spesifik buatanmu untuk menagih data yang kurang.",
           },
         },
+        "required": ["missing_fields", "ai_generated_question"],
+      },
+    },
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_pending_state",
+      "description":
+          """FASE 2 (RESOLUSI): Gunakan HANYA UNTUK MENGISI DAFTAR TERTUNDA. Jika setelah ditambah jawaban user datanya sudah lengkap, set remaining_missing_fields = [] dan tool ini akan otomatis mencatatnya!""",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pending_id": {"type": "string"},
+          "updated_note": {"type": "string"},
+          "updated_amount": {"type": "string"},
+          "remaining_missing_fields": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "JIKA SUDAH LENGKAP SEMUA, BERIKAN ARRAY KOSONG [].",
+          },
+          "next_ai_question": {"type": "string"},
+        },
         "required": [
-          "original_input",
-          "missing_fields",
-          "partial_note",
-          "reason",
+          "pending_id",
+          "updated_note",
+          "updated_amount",
+          "remaining_missing_fields",
         ],
       },
     },
@@ -98,27 +80,29 @@ PENTING: JANGAN bertanya kepada user. Cukup konfirmasi singkat bahwa data telah 
   {
     "type": "function",
     "function": {
-      "name": "update_transaction",
+      "name": "cancel_pending_state",
       "description":
-          """Perbarui nominal atau catatan transaksi yang sudah ada di database.
-Gunakan tool ini HANYA JIKA user secara eksplisit meminta untuk mengubah/mengupdate harga atau nama transaksi yang salah.""",
+          "Gunakan tool ini JIKA user secara eksplisit ingin MEMBATALKAN, MENOLAK, atau MENGHAPUS transaksi yang sedang ditanyakan (contoh: 'nggak jadi', 'batal', 'abaikan yang tadi').",
       "parameters": {
         "type": "object",
         "properties": {
-          "id": {
-            "type": "string",
-            "description":
-                "ID transaksi yang ingin diubah dikirim sebagai teks (harus dicari via query_database terlebih dahulu jika tidak tahu)",
-          },
-          "new_amount": {
-            "type": "string",
-            "description":
-                "Nominal baru MURNI ANGKA TANPA TITIK/KOMA (dikirim sebagai teks)",
-          },
-          "new_note": {
-            "type": "string",
-            "description": "Nama/catatan transaksi baru",
-          },
+          "pending_id": {"type": "string"},
+        },
+        "required": ["pending_id"],
+      },
+    },
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "update_transaction",
+      "description": "Perbarui transaksi historis.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "new_amount": {"type": "string"},
+          "new_note": {"type": "string"},
         },
         "required": ["id", "new_amount"],
       },
@@ -128,26 +112,16 @@ Gunakan tool ini HANYA JIKA user secara eksplisit meminta untuk mengubah/mengupd
     "type": "function",
     "function": {
       "name": "query_database",
-      "description":
-          """Jalankan query SQL untuk mengambil data transaksi historis.
-Gunakan tool ini ketika user bertanya tentang data keuangan mereka. Tabel: transactions, messages.""",
+      "description": "Jalankan query SQL untuk mengambil data historis.",
       "parameters": {
         "type": "object",
         "properties": {
-          "sql": {
-            "type": "string",
-            "description":
-                """Query SELECT valid. PENTING: Untuk mencari tanggal tertentu, gunakan fungsi LIKE karena format di DB adalah ISO8601. Contoh: WHERE date LIKE '2026-03-13%'""",
-          },
+          "sql": {"type": "string"},
           "viz_type": {
             "type": "string",
             "enum": ["bar", "pie", "line", "table", "auto"],
-            "description": "Tipe visualisasi",
           },
-          "summary_prompt": {
-            "type": "string",
-            "description": "Instruksi untuk merangkum hasil",
-          },
+          "summary_prompt": {"type": "string"},
         },
         "required": ["sql", "viz_type", "summary_prompt"],
       },
@@ -158,15 +132,12 @@ Gunakan tool ini ketika user bertanya tentang data keuangan mereka. Tabel: trans
     "function": {
       "name": "ask_clarification",
       "description":
-          """Tanyakan klarifikasi ke user tanpa menyimpan ke pending.""",
+          "Gunakan JIKA jawaban user SANGAT AMBIGU dan kamu tidak tahu angka tersebut untuk ID pending yang mana.",
       "parameters": {
         "type": "object",
         "properties": {
-          "question": {
-            "type": "string",
-            "description": "Pertanyaan klarifikasi",
-          },
-          "context": {"type": "string", "description": "Konteks klarifikasi"},
+          "question": {"type": "string"},
+          "context": {"type": "string"},
         },
         "required": ["question", "context"],
       },

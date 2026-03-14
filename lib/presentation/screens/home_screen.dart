@@ -17,10 +17,8 @@ import '../widgets/pending_reminder_card.dart';
 import '../widgets/receipt_card.dart';
 import 'database_view_screen.dart';
 
-// --- WIDGET ANIMASI SEDANG BERPIKIR ---
 class AnimatedThinkingBubble extends StatefulWidget {
   const AnimatedThinkingBubble({super.key});
-
   @override
   State<AnimatedThinkingBubble> createState() => _AnimatedThinkingBubbleState();
 }
@@ -33,11 +31,7 @@ class _AnimatedThinkingBubbleState extends State<AnimatedThinkingBubble> {
   void initState() {
     super.initState();
     _timer = Timer.periodic(const Duration(milliseconds: 400), (timer) {
-      if (mounted) {
-        setState(() {
-          _dotCount = (_dotCount + 1) % 4;
-        });
-      }
+      if (mounted) setState(() => _dotCount = (_dotCount + 1) % 4);
     });
   }
 
@@ -88,11 +82,9 @@ class _AnimatedThinkingBubbleState extends State<AnimatedThinkingBubble> {
     );
   }
 }
-// ----------------------------------------
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -125,19 +117,17 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onFinanceChanged() {
     final finance = context.read<FinanceProvider>();
     final pending = finance.pendingToFollowUp;
-
     if (pending != null) {
       finance.consumeFollowUp();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _injectFollowUpBubble(pending);
-      });
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _injectFollowUpBubble(pending),
+      );
     }
   }
 
   void _injectFollowUpBubble(PendingRequest pending) {
     if (!mounted) return;
     if (!isChatExpanded) setState(() => isChatExpanded = true);
-
     final finance = context.read<FinanceProvider>();
     finance.setWaitingDirectReply(true);
     finance.addMessage(pending.aiQuestion, true);
@@ -166,63 +156,21 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  bool _isDirectReplyOnly(String userText, PendingRequest activePending) {
-    final lower = userText.toLowerCase().trim();
-    String stripped = lower
-        .replaceAll(
-          RegExp(
-            r'\d+(?:[.,]\d+)?\s*(?:juta|jt|ribu|rb|k\b)?'
-            r'|\b(?:satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|sebelas'
-            r'|dua\s+puluh|tiga\s+puluh|empat\s+puluh|lima\s+puluh|enam\s+puluh'
-            r'|tujuh\s+puluh|delapan\s+puluh|sembilan\s+puluh'
-            r'|seratus|dua\s+ratus|tiga\s+ratus|empat\s+ratus|lima\s+ratus'
-            r'|enam\s+ratus|tujuh\s+ratus|delapan\s+ratus|sembilan\s+ratus'
-            r'|seribu|sejuta)\s*(?:juta|ribu|ratus)?\b',
-            caseSensitive: false,
-          ),
-          '',
-        )
-        .trim();
-
-    if (stripped.isEmpty) return true;
-
-    const confirmWords = {
-      'ya',
-      'iya',
-      'yep',
-      'ok',
-      'oke',
-      'yoi',
-      'betul',
-      'benar',
-      'rupiah',
-      'rp',
-      'aja',
-      'deh',
-      'dong',
-      'nih',
-      'tuh',
-    };
-    final words = stripped
-        .split(RegExp(r'\s+'))
-        .where((w) => w.isNotEmpty)
-        .toList();
-    if (words.every((w) => confirmWords.contains(w))) return true;
-
-    final pendingNama = (activePending.nama ?? '').toLowerCase();
-    if (pendingNama.isNotEmpty && stripped.contains(pendingNama)) return true;
-
-    return false;
-  }
-
   Future<String> _buildPendingContext(FinanceProvider finance) async {
-    if (finance.activeResolvingPending == null) return "";
-    final active = finance.activeResolvingPending!;
-    final nama = active.nama ?? active.originalInput;
-    final nominal = active.nominal != null
-        ? "Rp ${active.nominal}"
-        : "Belum ada";
-    return "=== TRANSAKSI TERTUNDA ===\nNama: $nama\nNominal: $nominal\nPertanyaan AI: ${active.aiQuestion}\n==========================\n";
+    final pendings = await finance.getAllPending();
+    if (pendings.isEmpty) return "";
+
+    StringBuffer sb = StringBuffer();
+    sb.writeln("=== DAFTAR TRANSAKSI TERTUNDA (PENDING) ===");
+    for (var p in pendings) {
+      final nama = p.nama ?? 'Belum ada';
+      final nominal = p.nominal != null ? "Rp ${p.nominal}" : "Belum ada";
+      sb.writeln(
+        "[ID: ${p.id}] Barang: $nama | Harga: $nominal | Field Kurang: ${p.missingFields} | Pertanyaan Aktif: '${p.aiQuestion}'",
+      );
+    }
+    sb.writeln("===========================================");
+    return sb.toString();
   }
 
   Future<void> _processMessage(String userText) async {
@@ -239,20 +187,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final aiService = AiService(apiKey: apiKey);
 
     final userAmountFallback = AmountParser.parseAmount(userText);
-    final wasWaitingDirectReply = finance.isWaitingDirectReply;
-    final activePendingSnapshot = finance.activeResolvingPending;
+    bool userHasDigits =
+        RegExp(r'\d').hasMatch(userText) || userAmountFallback != null;
 
     voice.stop();
-
-    bool isDirectlyResolving = false;
-    if (wasWaitingDirectReply &&
-        activePendingSnapshot != null &&
-        _isDirectReplyOnly(userText, activePendingSnapshot)) {
-      isDirectlyResolving = true;
-    } else {
-      finance.consumeDirectReply();
-      finance.setActiveResolvingPending(null);
-    }
+    finance.consumeDirectReply();
 
     try {
       await finance.addMessage(userText, false);
@@ -266,23 +205,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final pendingContext = await _buildPendingContext(finance);
-
-      if (isDirectlyResolving &&
-          userAmountFallback != null &&
-          activePendingSnapshot != null) {
-        await _executeResolvePending(
-          userText: userText,
-          aiService: aiService,
-          finance: finance,
-          voice: voice,
-          resolvedAmount: userAmountFallback,
-          targetPending: activePendingSnapshot,
-          pendingContext: pendingContext,
-        );
-        return;
-      }
-
       final systemPrompt = aiService.buildSystemPrompt(pendingContext);
+
       final messages = [
         {"role": "system", "content": systemPrompt},
         ...finance.chatHistory
@@ -311,10 +235,39 @@ class _HomeScreenState extends State<HomeScreen> {
           finance: finance,
           voice: voice,
           pendingContext: pendingContext,
-          userAmountFallback: userAmountFallback,
+          userHasDigits: userHasDigits,
         );
       } else {
-        final content = message['content'] as String? ?? "";
+        String content = message['content'] as String? ?? "";
+
+        bool aiHasPrice = RegExp(
+          r'(Rp\s*\.?\s*\d+|\d{3,})',
+          caseSensitive: false,
+        ).hasMatch(content);
+        if (aiHasPrice && !userHasDigits) {
+          String extractedNote = userText
+              .replaceAll(
+                RegExp(
+                  r'\d+(?:[.,]\d+)?\s*(?:juta|jt|ribu|rb|k\b)?|rp\s*',
+                  caseSensitive: false,
+                ),
+                '',
+              )
+              .trim();
+          if (extractedNote.isEmpty) extractedNote = "Item tersebut";
+
+          await finance.savePendingRequestNew(
+            originalInput: userText,
+            nama: extractedNote,
+            nominal: null,
+            aiQuestion: "Mohon lengkapi nominal/harga untuk '$extractedNote'.",
+            reason: "Penghancur Halusinasi Teks AI",
+            type: 'OUT',
+            missingFields: ['amount'],
+            partialData: {'note': extractedNote},
+          );
+          content = "Mohon lengkapi nominal/harga untuk '$extractedNote'.";
+        }
         await finance.addMessage(content, true);
         if (isChatExpanded) voice.speak(content);
       }
@@ -337,10 +290,15 @@ class _HomeScreenState extends State<HomeScreen> {
     required FinanceProvider finance,
     required VoiceService voice,
     required String pendingContext,
-    int? userAmountFallback,
+    required bool userHasDigits,
   }) async {
     final toolResults = <Map<String, dynamic>>[];
     List<Map<String, dynamic>> recordedTxs = [];
+    bool intercepted = false;
+    List<String> interactiveQuestions = [];
+
+    // --- PENCEGAH BUG DOUBLE RECORDING ---
+    Set<String> processedSignatures = {};
 
     for (final call in toolCalls) {
       String toolName = call['function']['name'] as String;
@@ -361,92 +319,142 @@ class _HomeScreenState extends State<HomeScreen> {
                 AmountParser.cleanNumberString(args['amount'].toString()),
               ) ??
               0;
-        if (userAmountFallback == null && checkAmount > 0) {
-          toolName = "save_pending";
+        if (!userHasDigits && checkAmount > 0) {
+          intercepted = true;
+          toolName = "create_pending_state";
           args['partial_note'] = args['note'];
-          args['partial_type'] = args['type'];
-          args['partial_category'] = args['category'];
+          args['missing_fields'] = ['amount'];
           args['amount'] = null;
+          args['ai_generated_question'] =
+              "Berapa nominal untuk ${args['note']}?";
         }
       }
 
       String result = "";
+
       if (toolName == "record_transaction") {
         int finalAmount = 0;
-        if (args['amount'] != null) {
-          String rawAmount = args['amount'].toString();
-          String cleanedAmount = AmountParser.cleanNumberString(rawAmount);
-          finalAmount = int.tryParse(cleanedAmount) ?? 0;
-        }
+        if (args['amount'] != null)
+          finalAmount =
+              int.tryParse(
+                AmountParser.cleanNumberString(args['amount'].toString()),
+              ) ??
+              0;
+        final note = args['note'] as String? ?? "Transaksi";
 
-        if (finalAmount <= 0) {
-          result = "error";
-        } else {
-          final note = args['note'] as String? ?? "Transaksi";
-          final type = (args['type'] as String? ?? 'OUT').toUpperCase();
-          final category = args['category'] as String? ?? 'Other';
-          try {
-            await finance.addTransaction(finalAmount, note, type, category);
-            if (finance.activeResolvingPending != null)
-              await finance.completePending(finance.activeResolvingPending!.id);
-            result = "success";
-            recordedTxs.add({
-              'note': note,
-              'amount': finalAmount,
-              'type': type,
-            });
-          } catch (_) {}
-        }
-      } else if (toolName == "save_pending") {
-        final originalInput = args['original_input'] as String? ?? "";
-        final partialNote = args['partial_note'] as String? ?? originalInput;
-        final partialType = (args['partial_type'] as String? ?? 'OUT')
-            .replaceAll('UNKNOWN', 'OUT')
-            .toUpperCase();
-        final partialCategory = args['partial_category'] as String? ?? 'Other';
+        if (finalAmount > 0) {
+          // CEK SIDIK JARI AGAR TIDAK DOUBLE
+          String sig = "${note.toLowerCase()}_$finalAmount";
+          if (!processedSignatures.contains(sig)) {
+            processedSignatures.add(sig);
 
+            final type = (args['type'] as String? ?? 'OUT').toUpperCase();
+            final category = args['category'] as String? ?? 'Other';
+
+            try {
+              await finance.addTransaction(finalAmount, note, type, category);
+              result = "success";
+              recordedTxs.add({
+                'note': note,
+                'amount': finalAmount,
+                'type': type,
+              });
+            } catch (_) {}
+          } else {
+            result =
+                "skipped_duplicate"; // Abaikan jika ini duplikat dari update_pending
+          }
+        }
+      } else if (toolName == "create_pending_state") {
+        final partialNote = args['partial_note'] as String? ?? "";
+        final aiQuestion =
+            args['ai_generated_question'] as String? ?? "Mohon lengkapi data.";
         int? aiAmount;
-        if (args['amount'] != null) {
+        if (args['partial_amount'] != null)
           aiAmount = int.tryParse(
-            AmountParser.cleanNumberString(args['amount'].toString()),
+            AmountParser.cleanNumberString(args['partial_amount'].toString()),
           );
-        }
 
-        final nama = (partialNote != originalInput && partialNote.isNotEmpty)
-            ? partialNote
-            : null;
-        final missing = <String>[];
-        String dynamicQuestion = "Informasi belum lengkap.";
-        if (nama == null && aiAmount == null) {
-          dynamicQuestion = "Tolong sebutkan nama/barang dan harganya ya.";
-          missing.addAll(['nama', 'nominal']);
-        } else if (nama == null) {
-          dynamicQuestion =
-              "Tolong sebutkan nama atau keterangan transaksinya.";
-          missing.add('nama');
-        } else if (aiAmount == null) {
-          dynamicQuestion = "Berapa nominal/harganya?";
-          missing.add('nominal');
-        }
+        final missing =
+            (args['missing_fields'] as List?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            <String>[];
 
         try {
           await finance.savePendingRequestNew(
-            originalInput: originalInput,
-            nama: nama,
+            originalInput: userText,
+            nama: partialNote.isEmpty ? null : partialNote,
             nominal: aiAmount,
-            aiQuestion: dynamicQuestion,
-            reason: args['reason'] ?? '',
-            category: partialCategory,
-            type: partialType,
+            aiQuestion: aiQuestion,
+            reason: "Data belum lengkap",
+            type: 'OUT',
             missingFields: missing,
-            partialData: {
-              'note': partialNote,
-              'type': partialType,
-              'category': partialCategory,
-            },
+            partialData: {'note': partialNote},
           );
-          result = "saved";
+          interactiveQuestions.add(aiQuestion);
+          result = "pending_created";
         } catch (_) {}
+      } else if (toolName == "update_pending_state") {
+        int pId = int.tryParse(args['pending_id'].toString()) ?? -1;
+        List<String> missing =
+            (args['remaining_missing_fields'] as List?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            <String>[];
+        String nextQuestion = args['next_ai_question'] as String? ?? "";
+
+        int? updatedAmount;
+        if (args['updated_amount'] != null)
+          updatedAmount = int.tryParse(
+            AmountParser.cleanNumberString(args['updated_amount'].toString()),
+          );
+        String updatedNote = args['updated_note'] as String? ?? "Transaksi";
+
+        if (pId != -1) {
+          if (missing.isEmpty && updatedAmount != null && updatedAmount > 0) {
+            String sig = "${updatedNote.toLowerCase()}_$updatedAmount";
+
+            try {
+              if (!processedSignatures.contains(sig)) {
+                processedSignatures.add(sig);
+                await finance.addTransaction(
+                  updatedAmount,
+                  updatedNote,
+                  "OUT",
+                  "Other",
+                );
+                recordedTxs.add({
+                  'note': updatedNote,
+                  'amount': updatedAmount,
+                  'type': "OUT",
+                });
+              }
+              // Wajib selesaikan pending walaupun itu duplikat
+              await finance.completePending(pId);
+              result = "resolved";
+            } catch (_) {}
+          } else {
+            try {
+              await finance.updatePendingState(
+                pId,
+                updatedNote,
+                updatedAmount,
+                jsonEncode(missing),
+                nextQuestion,
+              );
+              if (nextQuestion.isNotEmpty)
+                interactiveQuestions.add(nextQuestion);
+              result = "updated_still_pending";
+            } catch (_) {}
+          }
+        }
+      } else if (toolName == "cancel_pending_state") {
+        int pId = int.tryParse(args['pending_id'].toString()) ?? -1;
+        if (pId != -1) {
+          await finance.cancelPending(pId);
+          result = "cancelled";
+        }
       } else if (toolName == "update_transaction") {
         final id = int.tryParse(args['id'].toString()) ?? -1;
         int newAmount =
@@ -469,6 +477,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } else if (toolName == "ask_clarification") {
         result = "clarification_sent";
       }
+
       toolResults.add({
         "tool_call_id": toolCallId,
         "tool_name": toolName,
@@ -506,10 +515,19 @@ class _HomeScreenState extends State<HomeScreen> {
           if (queryResult.isEffectivelyEmpty || isSimpleAggregate) {
             await finance.addMessage(aiSummary, true);
           } else {
+            VizType parsedVizType = VizType.auto;
+            try {
+              parsedVizType = VizType.values.firstWhere(
+                (e) =>
+                    e.toString().split('.').last ==
+                    (args['viz_type']?.toString() ?? 'auto'),
+                orElse: () => VizType.auto,
+              );
+            } catch (_) {}
             await finance.addQueryResultMessage(
               aiSummary: aiSummary,
               queryResult: queryResult,
-              vizType: args['viz_type'] ?? 'auto',
+              vizType: parsedVizType.toString().split('.').last,
               originalQuestion: userText,
             );
           }
@@ -519,95 +537,63 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final clarifyTool = toolResults
-        .where((r) => r['result'] == 'clarification_sent')
-        .firstOrNull;
-    if (clarifyTool != null) {
-      final q =
-          (clarifyTool['args'] as Map<String, dynamic>)['question']
-              as String? ??
-          "";
-      await finance.addMessage(q, true);
-      if (isChatExpanded) voice.speak(q);
-      return;
-    }
-
     final hasUpdate = toolResults.any(
       (r) => r['tool_name'] == 'update_transaction',
     );
+    final hasCancel = toolResults.any(
+      (r) => r['tool_name'] == 'cancel_pending_state',
+    );
+
     if (hasUpdate) {
       await finance.addMessage("Data transaksi berhasil diperbarui! ✓", true);
       if (isChatExpanded) voice.speak("Data diperbarui");
-      return;
     }
 
-    final hasPending = toolResults.any((r) => r['tool_name'] == 'save_pending');
+    if (hasCancel) {
+      await finance.addMessage(
+        "Transaksi yang tertunda telah dibatalkan. ✓",
+        true,
+      );
+      if (isChatExpanded) voice.speak("Dibatalkan.");
+    }
 
     if (recordedTxs.isNotEmpty) {
-      await finance.addMessage("Transaksi Dicatat ✓", true);
+      await finance.addMessage("Transaksi Selesai & Dicatat ✓", true);
       String jsonStr = jsonEncode(recordedTxs);
       await finance.addMessage("RECEIPT_DATA", true, receiptData: jsonStr);
-
-      if (hasPending) {
-        await finance.addMessage(
-          "Data yang kurang masuk antrean pending ✓",
-          true,
-        );
-      }
-      if (isChatExpanded)
-        voice.speak(
-          hasPending ? "Dicatat sebagian" : "Transaksi berhasil dicatat",
-        );
-      return;
-    } else if (hasPending) {
-      await finance.addMessage(
-        "Data yang kurang masuk antrean pending ✓",
-        true,
-      );
-      if (isChatExpanded) voice.speak("Masuk pending");
-      return;
     }
 
-    await finance.addMessage("Proses Selesai! ✓", true);
-  }
+    // --- ALGORITMA INFINITE LOOP FLUTTER ---
+    final clarifyTool = toolResults
+        .where((r) => r['tool_name'] == 'ask_clarification')
+        .firstOrNull;
+    final remainingPendings = await finance.getAllPending();
 
-  Future<void> _executeResolvePending({
-    required String userText,
-    required AiService aiService,
-    required FinanceProvider finance,
-    required VoiceService voice,
-    required int resolvedAmount,
-    required PendingRequest targetPending,
-    required String pendingContext,
-  }) async {
-    final type = (targetPending.type == '?' || targetPending.type.isEmpty)
-        ? 'OUT'
-        : targetPending.type;
-    final nama = targetPending.nama ?? targetPending.originalInput;
-
-    try {
-      await finance.addTransaction(
-        resolvedAmount,
-        nama,
-        type,
-        targetPending.category,
-      );
-      await finance.completePending(targetPending.id);
-
-      await finance.addMessage("Transaksi dari pending dicatat ✓", true);
-      List<Map<String, dynamic>> rx = [
-        {'note': nama, 'amount': resolvedAmount, 'type': type},
-      ];
-      await finance.addMessage(
-        "RECEIPT_DATA",
-        true,
-        receiptData: jsonEncode(rx),
-      );
-
-      if (isChatExpanded)
-        voice.speak("Transaksi dari pending berhasil dicatat.");
-    } catch (e) {
-      await finance.addMessage("Gagal mencatat ✓", true);
+    if (clarifyTool != null) {
+      // 1. Paling Prioritas: Jika AI kebingungan, tanya dulu ke user
+      final q =
+          clarifyTool['args']['question'] as String? ??
+          "Bisa diperjelas lagi maksudnya?";
+      await finance.addMessage(q, true);
+      if (isChatExpanded) voice.speak(q);
+    } else if (interactiveQuestions.isNotEmpty) {
+      // 2. Pertanyaan baru dari AI (dari create_pending atau update_pending yang belum selesai)
+      await finance.addMessage(interactiveQuestions.join("\n"), true);
+      if (isChatExpanded && recordedTxs.isEmpty)
+        voice.speak("Mohon lengkapi datanya.");
+    } else if (intercepted) {
+      // 3. Fallback pencegah halusinasi
+      await finance.addMessage("Berapa nominal/harganya?", true);
+    } else if (remainingPendings.isNotEmpty) {
+      // 4. THE MAGIC LOOP: Jika AI diam saja, tapi DB bilang MASIH ADA antrean, Flutter yang akan memaksa menanyakannya!
+      String nextQ = remainingPendings.first.aiQuestion;
+      await finance.addMessage("Masih ada yang tertunda:\n$nextQ", true);
+      if (isChatExpanded) voice.speak("Masih ada transaksi tertunda.");
+    } else if (recordedTxs.isNotEmpty) {
+      // 5. Semuanya bersih, no antrean!
+      if (isChatExpanded) voice.speak("Semua transaksi berhasil dicatat");
+    } else if (!hasUpdate && !hasCancel) {
+      await finance.addMessage("Proses Selesai! ✓", true);
     }
   }
 
@@ -696,14 +682,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   TextButton.icon(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const DatabaseViewScreen(),
-                        ),
-                      );
-                    },
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const DatabaseViewScreen(),
+                      ),
+                    ),
                     icon: const Icon(
                       Icons.table_chart,
                       size: 16,
@@ -890,9 +874,8 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.all(15),
               itemCount: listCount,
               itemBuilder: (context, i) {
-                if (i == finance.chatHistory.length) {
+                if (i == finance.chatHistory.length)
                   return const AnimatedThinkingBubble();
-                }
 
                 final m = finance.chatHistory[i];
                 final isAi = m['isAi'] == 1;
@@ -907,17 +890,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (isAi &&
                     m.containsKey('queryResult') &&
                     m['queryResult'] != null) {
-                  // --- BUG FIX: KONVERSI STRING KE ENUM VIZTYPE DENGAN AMAN ---
                   VizType parsedVizType = VizType.auto;
-                  String rawVizType = m['vizType']?.toString() ?? 'auto';
                   try {
                     parsedVizType = VizType.values.firstWhere(
-                      (e) => e.toString().split('.').last == rawVizType,
+                      (e) =>
+                          e.toString().split('.').last ==
+                          (m['vizType']?.toString() ?? 'auto'),
                       orElse: () => VizType.auto,
                     );
                   } catch (_) {}
-                  // -------------------------------------------------------------
-
                   return Align(
                     alignment: Alignment.centerLeft,
                     child: QueryResultCard(
