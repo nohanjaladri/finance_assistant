@@ -49,15 +49,13 @@ dependencies:
   firebase_core: ^4.5.0
   firebase_database: ^12.1.4
   firebase_auth: ^6.2.0
+  shared_preferences: ^2.5.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_launcher_icons: ^0.13.1
 
-flutter_launcher_icons:
-  android: true
-  image_path: "assets/icon/dompet.png"
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
   # activated in the `analysis_options.yaml` file located at the root of your
@@ -65,6 +63,9 @@ flutter_launcher_icons:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/icon/dompet.png"
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 

@@ -1,24 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-
-// --- IMPORT FIREBASE ---
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // IMPORT AUTH
 import 'firebase_options.dart';
-// -----------------------
 
-// --- IMPORT DENGAN STRUKTUR CLEAN ARCHITECTURE ---
 import 'data/services/voice_service.dart';
 import 'presentation/providers/finance_provider.dart';
 import 'presentation/screens/home_screen.dart';
-// -------------------------------------------------
+import 'presentation/screens/auth_screens.dart'; // IMPORT LAYAR LOGIN BARU
 
-// UBAH main() MENJADI async UNTUK MENUNGGU FIREBASE
 void main() async {
-  // Wajib dipanggil sebelum menggunakan plugin native (seperti Firebase)
   WidgetsFlutterBinding.ensureInitialized();
-
-  // NYALAKAN MESIN FIREBASE! 🔥
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   runApp(
@@ -39,8 +32,10 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.deepPurple),
-      // Aplikasi dimulai dari SplashScreen
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: const Color(0xFF5E5CE6),
+      ),
       home: const SplashScreen(),
     );
   }
@@ -62,27 +57,35 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _initializeApp() async {
     try {
-      // 1. Muat API Key dari .env
+      // 1. Muat Environment & Data Lokal
       await dotenv.load(fileName: ".env");
-
-      // 2. Inisialisasi Voice Service
       await context.read<VoiceService>().init();
-
-      // 3. Muat Data Keuangan awal (SQLite lokal)
       await context.read<FinanceProvider>().refreshData();
 
-      // Beri sedikit delay agar transisi tidak terlalu kaget (optional)
       await Future.delayed(const Duration(seconds: 2));
 
       if (mounted) {
-        // Pindah ke HomeScreen dan hapus tumpukan navigasi (tidak bisa back ke splash)
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
+        // 2. POLISI LALU LINTAS: Cek Status Login Firebase
+        final user = FirebaseAuth.instance.currentUser;
+        Widget nextScreen;
+
+        if (user == null) {
+          // Belum Login -> Lempar ke Layar Login
+          nextScreen = const LoginScreen();
+        } else if (!user.emailVerified) {
+          // Sudah Login tapi belum di-verifikasi emailnya
+          nextScreen = const VerifyEmailScreen();
+        } else {
+          // Aman! Masuk ke Dasbor
+          nextScreen = const HomeScreen();
+        }
+
+        Navigator.of(
+          context,
+        ).pushReplacement(MaterialPageRoute(builder: (_) => nextScreen));
       }
     } catch (e) {
       debugPrint("Initialization Error: $e");
-      // Jika error, tampilkan pesan di layar splash
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -100,33 +103,29 @@ class _SplashScreenState extends State<SplashScreen> {
         width: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.deepPurple, Colors.indigo],
+            colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.account_balance_wallet,
-              size: 80,
-              color: Colors.white,
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              "AI Financier",
+          children: const [
+            Icon(Icons.account_balance_wallet, size: 80, color: Colors.white),
+            SizedBox(height: 20),
+            Text(
+              "Dompetku AI",
               style: TextStyle(
-                fontSize: 24,
+                fontSize: 28,
                 fontWeight: FontWeight.bold,
                 color: Colors.white,
               ),
             ),
-            const SizedBox(height: 10),
-            const CircularProgressIndicator(color: Colors.white),
-            const SizedBox(height: 30),
-            const Text(
-              "Menyiapkan asisten keuanganmu...",
+            SizedBox(height: 10),
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(height: 30),
+            Text(
+              "Mengamankan sistem...",
               style: TextStyle(color: Colors.white70),
             ),
           ],

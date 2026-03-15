@@ -1,21 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-
+import 'package:firebase_auth/firebase_auth.dart';
+import 'settings_profile_screens.dart'; // IMPORT LAYAR BARU
 import '../../core/utils/amount_parser.dart';
 import '../../core/utils/query_validator.dart';
 import '../../data/database/database_helper.dart';
 import '../../data/database/pending_request_helper.dart';
 import '../../data/services/ai_service.dart';
 import '../../data/services/voice_service.dart';
+import '../../data/services/auth_service.dart'; // UNTUK FUNGSI LOGOUT
 import '../providers/finance_provider.dart';
 import '../widgets/query_result_card.dart';
 import '../widgets/pending_reminder_card.dart';
 import '../widgets/receipt_card.dart';
 import 'transaction_history_screen.dart';
+import 'auth_screens.dart'; // UNTUK KEMBALI KE LOGIN
 
 // ==========================================
 // WIDGET SKELETON (UNTUK EFEK SHIMMER LOADING)
@@ -256,6 +260,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool isChatExpanded = false;
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -1065,20 +1070,12 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
-
-    // TEMA BUNGLON: Mengubah warna UI sesuai Mode
     final Color primaryColor = finance.isSharedMode
         ? const Color(0xFF009688)
         : const Color(0xFF5E5CE6);
     final List<Color> cardGradient = finance.isSharedMode
-        ? [
-            const Color(0xFF00B4DB),
-            const Color(0xFF0083B0),
-          ] // Gradient Teal/Ocean
-        : [
-            const Color(0xFF5E5CE6),
-            const Color(0xFF8C52FF),
-          ]; // Gradient Ungu Premium
+        ? [const Color(0xFF00B4DB), const Color(0xFF0083B0)]
+        : [const Color(0xFF5E5CE6), const Color(0xFF8C52FF)];
 
     return PopScope(
       canPop: false,
@@ -1111,7 +1108,9 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       },
       child: Scaffold(
+        key: _scaffoldKey, // KUNCI MENU DRAWER
         backgroundColor: const Color(0xFFF4F6FC),
+        drawer: _buildSideMenu(primaryColor, finance), // PASANG DRAWER DI SINI
         body: Stack(
           children: [
             _buildDashboard(finance, primaryColor, cardGradient),
@@ -1119,6 +1118,394 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  // ==========================================
+  // UI: SIDE MENU (DRAWER)
+  // ==========================================
+  Widget _buildSideMenu(Color primaryColor, FinanceProvider finance) {
+    final user = FirebaseAuth.instance.currentUser;
+    final email = user?.email ?? "pengguna@email.com";
+
+    return Drawer(
+      backgroundColor: Colors.white,
+      child: Column(
+        children: [
+          UserAccountsDrawerHeader(
+            decoration: BoxDecoration(color: primaryColor),
+            accountName: const Text(
+              "Dompetku AI User",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            accountEmail: Text(email),
+            currentAccountPicture: CircleAvatar(
+              backgroundColor: Colors.white,
+              child: Text(
+                email[0].toUpperCase(),
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: primaryColor,
+                ),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text('Profil Saya'),
+            onTap: () {
+              Navigator.pop(context);
+              // MENUJU KE LAYAR PROFIL
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.settings_outlined),
+            title: const Text('Pengaturan'),
+            onTap: () {
+              Navigator.pop(context);
+              // MENUJU KE LAYAR PENGATURAN
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.group_add_outlined),
+            title: const Text(
+              'Dompet Bersama',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.redAccent,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                "ACTIVE",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            onTap: () {
+              Navigator.pop(context);
+              _showSharedWalletBottomSheet(primaryColor, finance);
+            },
+          ),
+          const Spacer(),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.redAccent),
+            title: const Text(
+              'Keluar (Logout)',
+              style: TextStyle(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            onTap: () async {
+              Navigator.pop(context);
+              await AuthService().signOut();
+              if (mounted)
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                );
+            },
+          ),
+          const SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================
+  // UI: BOTTOM SHEET DOMPET BERSAMA (5-DIGIT)
+  // ==========================================
+  void _showSharedWalletBottomSheet(
+    Color primaryColor,
+    FinanceProvider finance,
+  ) {
+    final TextEditingController joinController = TextEditingController();
+    bool isProcessing = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          // StatefulBuilder agar tombol loading bisa berputar
+          builder: (BuildContext context, StateSetter setSheetState) {
+            return Container(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(30.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade300,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    const Text(
+                      "Dompet Bersama",
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1E1E2C),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      "Bagikan kode ini ke pasangan/teman Anda agar mereka bisa mengakses data di Mode Bersama.",
+                      style: TextStyle(color: Colors.grey, fontSize: 14),
+                    ),
+                    const SizedBox(height: 30),
+
+                    // BAGIAN 1: KODE SAYA
+                    const Text(
+                      "Kode Ruangan Anda:",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1E1E2C),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 16,
+                      ),
+                      decoration: BoxDecoration(
+                        color: primaryColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: primaryColor.withOpacity(0.3),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            finance.myRoomCode,
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 8,
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.copy_rounded, color: primaryColor),
+                            onPressed: () {
+                              Clipboard.setData(
+                                ClipboardData(text: finance.myRoomCode),
+                              );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text("Kode berhasil disalin!"),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 30),
+                    Row(
+                      children: [
+                        Expanded(child: Divider(color: Colors.grey.shade300)),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 10),
+                          child: Text(
+                            "ATAU",
+                            style: TextStyle(
+                              color: Colors.grey,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        Expanded(child: Divider(color: Colors.grey.shade300)),
+                      ],
+                    ),
+                    const SizedBox(height: 30),
+
+                    // BAGIAN 2: GABUNG KE RUANGAN TEMAN ATAU KEMBALI
+                    if (finance.isJoiningOtherRoom) ...[
+                      // JIKA SEDANG MENUMPANG DI RUANG TEMAN
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          children: [
+                            const Icon(
+                              Icons.warning_amber_rounded,
+                              color: Colors.orange,
+                              size: 40,
+                            ),
+                            const SizedBox(height: 10),
+                            const Text(
+                              "Anda sedang berada di Ruangan Teman",
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.orange,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.orange,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              onPressed: () async {
+                                Navigator.pop(sheetContext);
+                                await finance.leaveSharedRoom();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      "Kembali ke ruangan sendiri.",
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: const Text(
+                                "Keluar & Kembali ke Ruang Sendiri",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      // JIKA DI RUANG SENDIRI
+                      const Text(
+                        "Gabung ke Ruangan Teman:",
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1E1E2C),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: joinController,
+                        textCapitalization: TextCapitalization.characters,
+                        maxLength: 5,
+                        decoration: InputDecoration(
+                          hintText: "Masukkan 5 Digit Kode",
+                          counterText: "",
+                          filled: true,
+                          fillColor: Colors.grey.shade100,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: BorderSide.none,
+                          ),
+                          suffixIcon: Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: primaryColor,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              onPressed: isProcessing
+                                  ? null
+                                  : () async {
+                                      if (joinController.text.length != 5)
+                                        return;
+                                      setSheetState(() => isProcessing = true);
+
+                                      bool success = await finance
+                                          .joinSharedRoom(joinController.text);
+
+                                      setSheetState(() => isProcessing = false);
+                                      if (success) {
+                                        Navigator.pop(sheetContext);
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              "Berhasil gabung ke ruang teman!",
+                                            ),
+                                            backgroundColor: Colors.green,
+                                          ),
+                                        );
+                                      } else {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              "Kode tidak ditemukan!",
+                                            ),
+                                            backgroundColor: Colors.redAccent,
+                                          ),
+                                        );
+                                      }
+                                    },
+                              child: isProcessing
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Text(
+                                      "Gabung",
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -1141,21 +1528,34 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    "Dompetku",
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF1E1E2C),
-                    ),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(
+                          Icons.menu_rounded,
+                          size: 30,
+                          color: Color(0xFF1E1E2C),
+                        ),
+                        onPressed: () {
+                          _scaffoldKey.currentState?.openDrawer();
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        "Dompetku",
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF1E1E2C),
+                        ),
+                      ),
+                    ],
                   ),
-                  // INDIKATOR AWAN PENGGANTI TOMBOL DELETE
                   CloudSyncIndicator(status: finance.syncStatus),
                 ],
               ),
               const SizedBox(height: 20),
 
-              // SWITCHER MODE DITAMBAHKAN DI SINI
               _buildWorkspaceToggle(finance, primaryColor),
 
               _isLoading
@@ -1264,13 +1664,43 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            "Total Saldo",
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                "Total Saldo",
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (finance.isJoiningOtherRoom)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.link, color: Colors.white, size: 12),
+                      SizedBox(width: 4),
+                      Text(
+                        "Terhubung",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 8),
 
