@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import '../../data/database/database_helper.dart';
 import '../../data/database/pending_request_helper.dart';
 
+// Enum untuk status indikator Cloud
+enum SyncStatus { synced, syncing, offline }
+
 class FinanceProvider extends ChangeNotifier {
   int totalIn = 0;
   int totalOut = 0;
@@ -15,6 +18,29 @@ class FinanceProvider extends ChangeNotifier {
   bool isWaitingDirectReply = false;
   PendingRequest? pendingToFollowUp;
 
+  // --- STATE DUAL DATABASE & CLOUD SYNC ---
+  bool isSharedMode = false;
+  SyncStatus syncStatus = SyncStatus.synced;
+
+  void toggleWorkspace() async {
+    isSharedMode = !isSharedMode;
+    notifyListeners();
+    await refreshData();
+  }
+
+  // Simulasi proses upload ke Firebase (Nanti diganti dengan fungsi asli Firebase)
+  Future<void> _simulateCloudSync() async {
+    syncStatus = SyncStatus.syncing;
+    notifyListeners();
+
+    // Anggap butuh waktu 1.2 detik untuk menembak data ke Firebase
+    await Future.delayed(const Duration(milliseconds: 1200));
+
+    syncStatus = SyncStatus.synced;
+    notifyListeners();
+  }
+  // -----------------------------------------
+
   Future<void> _syncPendingCount() async {
     try {
       pendingCount = await PendingRequestHelper.instance.countPending();
@@ -23,6 +49,8 @@ class FinanceProvider extends ChangeNotifier {
 
   Future<void> refreshData() async {
     try {
+      // NANTI: Modifikasi DatabaseHelper agar membedakan file personal.db dan shared.db
+      // Saat ini kita muat dari tabel yang sama dulu sebagai fondasi UI
       final txs = await DatabaseHelper.instance.getAllTransactions();
       final msgs = await DatabaseHelper.instance.getMessages(limit: 30);
 
@@ -53,13 +81,14 @@ class FinanceProvider extends ChangeNotifier {
   ) async {
     await DatabaseHelper.instance.addTransaction(amount, note, type, category);
     await refreshData();
+    _simulateCloudSync(); // Trigger animasi sinkronisasi Firebase
   }
 
-  // --- FITUR KONTROL MANUAL DARI UI ---
   Future<void> deleteTransactionManual(int id) async {
     final db = await DatabaseHelper.instance.database;
     await db.delete('transactions', where: 'id = ?', whereArgs: [id]);
     await refreshData();
+    _simulateCloudSync();
   }
 
   Future<void> updateTransactionManual(int id, int amount, String note) async {
@@ -71,8 +100,8 @@ class FinanceProvider extends ChangeNotifier {
       whereArgs: [id],
     );
     await refreshData();
+    _simulateCloudSync();
   }
-  // ------------------------------------
 
   Future<void> addMessage(String text, bool isAi, {String? receiptData}) async {
     await DatabaseHelper.instance.insertMessage(
@@ -112,6 +141,7 @@ class FinanceProvider extends ChangeNotifier {
     isWaitingDirectReply = false;
     await _syncPendingCount();
     notifyListeners();
+    _simulateCloudSync();
   }
 
   Future<void> cancelPending(int pendingId) async {
@@ -173,6 +203,7 @@ class FinanceProvider extends ChangeNotifier {
     );
     await _syncPendingCount();
     notifyListeners();
+    _simulateCloudSync();
   }
 
   Future<void> updatePendingState(
@@ -193,6 +224,7 @@ class FinanceProvider extends ChangeNotifier {
     await db.update('pending_requests', data, where: 'id = ?', whereArgs: [id]);
     await _syncPendingCount();
     notifyListeners();
+    _simulateCloudSync();
   }
 
   Future<RawQueryResult> executeQuery(String validatedSql) {
@@ -210,5 +242,6 @@ class FinanceProvider extends ChangeNotifier {
     pendingToFollowUp = null;
     isWaitingDirectReply = false;
     await refreshData();
+    _simulateCloudSync();
   }
 }
