@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../data/database/database_helper.dart';
 import '../../data/database/pending_request_helper.dart';
@@ -54,6 +55,25 @@ class FinanceProvider extends ChangeNotifier {
     await refreshData();
   }
 
+  // --- FITUR KONTROL MANUAL DARI UI ---
+  Future<void> deleteTransactionManual(int id) async {
+    final db = await DatabaseHelper.instance.database;
+    await db.delete('transactions', where: 'id = ?', whereArgs: [id]);
+    await refreshData();
+  }
+
+  Future<void> updateTransactionManual(int id, int amount, String note) async {
+    final db = await DatabaseHelper.instance.database;
+    await db.update(
+      'transactions',
+      {'amount': amount, 'note': note},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await refreshData();
+  }
+  // ------------------------------------
+
   Future<void> addMessage(String text, bool isAi, {String? receiptData}) async {
     await DatabaseHelper.instance.insertMessage(
       text,
@@ -94,7 +114,6 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- FUNGSI YANG DIKEMBALIKAN ---
   Future<void> cancelPending(int pendingId) async {
     await PendingRequestHelper.instance.cancelPending(pendingId);
     if (activeResolvingPending?.id == pendingId) activeResolvingPending = null;
@@ -103,7 +122,6 @@ class FinanceProvider extends ChangeNotifier {
     await _syncPendingCount();
     notifyListeners();
   }
-  // --------------------------------
 
   void setActiveResolvingPending(PendingRequest? pending) {
     activeResolvingPending = pending;

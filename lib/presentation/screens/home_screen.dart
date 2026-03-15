@@ -17,6 +17,54 @@ import '../widgets/pending_reminder_card.dart';
 import '../widgets/receipt_card.dart';
 import 'transaction_history_screen.dart';
 
+// ==========================================
+// WIDGET SKELETON (UNTUK EFEK SHIMMER LOADING)
+// ==========================================
+class Skeleton extends StatefulWidget {
+  final double? width, height;
+  final BorderRadius? borderRadius;
+  const Skeleton({super.key, this.width, this.height, this.borderRadius});
+  @override
+  State<Skeleton> createState() => _SkeletonState();
+}
+
+class _SkeletonState extends State<Skeleton>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.4, end: 1.0).animate(_controller),
+      child: Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade300,
+          borderRadius: widget.borderRadius ?? BorderRadius.circular(8),
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// BUBBLE BERPIKIR AI
+// ==========================================
 class AnimatedThinkingBubble extends StatefulWidget {
   const AnimatedThinkingBubble({super.key});
   @override
@@ -47,15 +95,16 @@ class _AnimatedThinkingBubbleState extends State<AnimatedThinkingBubble> {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 5),
-        padding: const EdgeInsets.all(12),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
+        margin: const EdgeInsets.only(bottom: 12, top: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
         decoration: BoxDecoration(
-          color: Colors.grey[100],
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: Colors.grey.shade300),
+          color: Colors.grey.shade100,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(20),
+            topRight: Radius.circular(20),
+            bottomRight: Radius.circular(20),
+            bottomLeft: Radius.circular(5),
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -64,16 +113,17 @@ class _AnimatedThinkingBubbleState extends State<AnimatedThinkingBubble> {
               width: 14,
               height: 14,
               child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.deepPurple,
+                strokeWidth: 2.5,
+                color: Color(0xFF6C63FF),
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 12),
             Text(
               "Sedang berpikir $dots",
-              style: const TextStyle(
-                color: Colors.black54,
+              style: TextStyle(
+                color: Colors.grey.shade600,
                 fontStyle: FontStyle.italic,
+                fontSize: 13,
               ),
             ),
           ],
@@ -95,21 +145,81 @@ class _HomeScreenState extends State<HomeScreen> {
   final ScrollController _scrollController = ScrollController();
   DateTime? _lastPressedAt;
 
+  bool _showChartAnim = false;
+  bool _isLoading = false;
+  int _refreshKey = 0;
+  bool _showScrollToBottom = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<FinanceProvider>().addListener(_onFinanceChanged);
     });
+
+    _scrollController.addListener(_scrollListener);
+
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) setState(() => _showChartAnim = true);
+    });
+  }
+
+  void _scrollListener() {
+    if (_scrollController.hasClients) {
+      final maxScroll = _scrollController.position.maxScrollExtent;
+      final currentScroll = _scrollController.offset;
+      final show = (maxScroll - currentScroll) > 150;
+      if (_showScrollToBottom != show) {
+        setState(() => _showScrollToBottom = show);
+      }
+    }
+  }
+
+  // --- LOGIKA REFRESH DATA & SHIMMER (REVISI TANPA DELAY BUATAN) ---
+  Future<void> _handleRefresh() async {
+    setState(() {
+      _isLoading = true;
+      _showChartAnim = false;
+    });
+
+    // Murni mengikuti kecepatan pemuatan data dari SQLite
+    await context.read<FinanceProvider>().refreshData();
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _refreshKey++;
+      });
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (mounted) setState(() => _showChartAnim = true);
+      });
+    }
+  }
+
+  void _toggleChat(bool open) {
+    setState(() => isChatExpanded = open);
+    if (open) {
+      _scrollToBottom();
+    } else {
+      _handleRefresh();
+    }
   }
 
   void _showErrorSnackBar(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message, style: const TextStyle(color: Colors.white)),
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         backgroundColor: Colors.redAccent,
         behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(20),
       ),
     );
   }
@@ -127,7 +237,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _injectFollowUpBubble(PendingRequest pending) {
     if (!mounted) return;
-    if (!isChatExpanded) setState(() => isChatExpanded = true);
+    if (!isChatExpanded) _toggleChat(true);
     final finance = context.read<FinanceProvider>();
     finance.setWaitingDirectReply(true);
     finance.addMessage(pending.aiQuestion, true);
@@ -137,6 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     context.read<FinanceProvider>().removeListener(_onFinanceChanged);
+    _scrollController.removeListener(_scrollListener);
     _scrollController.dispose();
     _textController.dispose();
     super.dispose();
@@ -150,7 +261,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _scrollController.animateTo(
           _scrollController.position.maxScrollExtent,
           duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
+          curve: Curves.easeOutQuart,
         );
       }
     });
@@ -260,13 +371,13 @@ class _HomeScreenState extends State<HomeScreen> {
             originalInput: userText,
             nama: extractedNote,
             nominal: null,
-            aiQuestion: "Mohon lengkapi nominal/harga untuk '$extractedNote'.",
+            aiQuestion: "Mohon lengkapi nominal untuk '$extractedNote'.",
             reason: "Penghancur Halusinasi Teks AI",
             type: 'OUT',
             missingFields: ['amount'],
             partialData: {'note': extractedNote},
           );
-          content = "Mohon lengkapi nominal/harga untuk '$extractedNote'.";
+          content = "Mohon lengkapi nominal untuk '$extractedNote'.";
         }
         await finance.addMessage(content, true);
         if (isChatExpanded) voice.speak(content);
@@ -296,7 +407,6 @@ class _HomeScreenState extends State<HomeScreen> {
     List<Map<String, dynamic>> recordedTxs = [];
     bool intercepted = false;
     List<String> interactiveQuestions = [];
-
     Set<String> processedSignatures = {};
 
     for (final call in toolCalls) {
@@ -345,10 +455,8 @@ class _HomeScreenState extends State<HomeScreen> {
           String sig = "${note.toLowerCase()}_$finalAmount";
           if (!processedSignatures.contains(sig)) {
             processedSignatures.add(sig);
-
             final type = (args['type'] as String? ?? 'OUT').toUpperCase();
             final category = args['category'] as String? ?? 'Other';
-
             try {
               await finance.addTransaction(finalAmount, note, type, category);
               result = "success";
@@ -356,6 +464,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 'note': note,
                 'amount': finalAmount,
                 'type': type,
+              });
+
+              if (mounted) setState(() => _showChartAnim = false);
+              Future.delayed(const Duration(milliseconds: 50), () {
+                if (mounted) setState(() => _showChartAnim = true);
               });
             } catch (_) {}
           } else {
@@ -371,7 +484,6 @@ class _HomeScreenState extends State<HomeScreen> {
           aiAmount = int.tryParse(
             AmountParser.cleanNumberString(args['partial_amount'].toString()),
           );
-
         final missing =
             (args['missing_fields'] as List?)
                 ?.map((e) => e.toString())
@@ -411,7 +523,6 @@ class _HomeScreenState extends State<HomeScreen> {
         if (pId != -1) {
           if (missing.isEmpty && updatedAmount != null && updatedAmount > 0) {
             String sig = "${updatedNote.toLowerCase()}_$updatedAmount";
-
             try {
               if (!processedSignatures.contains(sig)) {
                 processedSignatures.add(sig);
@@ -425,6 +536,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   'note': updatedNote,
                   'amount': updatedAmount,
                   'type': "OUT",
+                });
+
+                if (mounted) setState(() => _showChartAnim = false);
+                Future.delayed(const Duration(milliseconds: 50), () {
+                  if (mounted) setState(() => _showChartAnim = true);
                 });
               }
               await finance.completePending(pId);
@@ -599,15 +715,79 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _compactNumber(double value) {
     if (value >= 1000000) {
-      return '${(value / 1000000).toStringAsFixed(1).replaceAll('.0', '')}M';
+      String str = (value / 1000000).toStringAsFixed(1);
+      if (str.endsWith('.0')) str = str.substring(0, str.length - 2);
+      return '$str jt';
     } else if (value >= 1000) {
-      return '${(value / 1000).toStringAsFixed(0)}K';
+      String str = (value / 1000).toStringAsFixed(0);
+      return '$str rb';
     }
     return value.toInt().toString();
   }
 
-  // --- HELPER IKON BARU (SINKRONISASI KE DASBOR) ---
-  IconData _getCategoryIcon(String category) {
+  IconData _getCategoryIcon(String category, String note) {
+    final text = note.toLowerCase();
+    if (text.contains('gojek') ||
+        text.contains('grab') ||
+        text.contains('ojek') ||
+        text.contains('parkir') ||
+        text.contains('bensin') ||
+        text.contains('maxim') ||
+        text.contains('tol'))
+      return Icons.two_wheeler;
+    if (text.contains('listrik') ||
+        text.contains('pln') ||
+        text.contains('token') ||
+        text.contains('air') ||
+        text.contains('wifi') ||
+        text.contains('internet') ||
+        text.contains('indihome'))
+      return Icons.receipt;
+    if (text.contains('dana') ||
+        text.contains('gopay') ||
+        text.contains('ovo') ||
+        text.contains('shopeepay') ||
+        text.contains('topup') ||
+        text.contains('top up'))
+      return Icons.account_balance_wallet;
+    if (text.contains('sayur') ||
+        text.contains('buah') ||
+        text.contains('beras') ||
+        text.contains('pasar') ||
+        text.contains('indomaret') ||
+        text.contains('alfamart'))
+      return Icons.local_grocery_store;
+    if (text.contains('makan') ||
+        text.contains('minum') ||
+        text.contains('kopi') ||
+        text.contains('bakso') ||
+        text.contains('ayam') ||
+        text.contains('warteg'))
+      return Icons.restaurant;
+    if (text.contains('gaji') ||
+        text.contains('bonus') ||
+        text.contains('thr') ||
+        text.contains('upah'))
+      return Icons.payments;
+    if (text.contains('pulsa') ||
+        text.contains('kuota') ||
+        text.contains('paket') ||
+        text.contains('axis') ||
+        text.contains('telkomsel'))
+      return Icons.phone_android;
+    if (text.contains('transfer') ||
+        text.contains('tf') ||
+        text.contains('kirim') ||
+        text.contains('terima'))
+      return Icons.swap_horiz;
+    if (text.contains('qris') || text.contains('scan')) return Icons.qr_code_2;
+    if (text.contains('obat') ||
+        text.contains('rs') ||
+        text.contains('dokter') ||
+        text.contains('apotek') ||
+        text.contains('klinik'))
+      return Icons.medical_services;
+
     switch (category) {
       case 'Food':
         return Icons.restaurant;
@@ -640,7 +820,7 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'Transfer_Out':
         return Icons.north_east;
       default:
-        return Icons.category;
+        return Icons.receipt_long;
     }
   }
 
@@ -682,7 +862,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (didPop) return;
         if (isChatExpanded) {
           context.read<VoiceService>().stop();
-          setState(() => isChatExpanded = false);
+          _toggleChat(false);
           return;
         }
         final now = DateTime.now();
@@ -690,14 +870,24 @@ class _HomeScreenState extends State<HomeScreen> {
             now.difference(_lastPressedAt!) > const Duration(seconds: 2)) {
           _lastPressedAt = now;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Tekan lagi untuk keluar')),
+            SnackBar(
+              content: const Text(
+                'Tekan lagi untuk keluar',
+                style: TextStyle(color: Colors.white),
+              ),
+              backgroundColor: Colors.black87,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
           );
         } else {
           Navigator.of(context).pop();
         }
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF8F9FE),
+        backgroundColor: const Color(0xFFF4F6FC),
         body: Stack(
           children: [_buildDashboard(finance), _buildChatPanel(finance)],
         ),
@@ -708,10 +898,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildDashboard(FinanceProvider finance) {
     return SafeArea(
       child: RefreshIndicator(
-        onRefresh: () => finance.refreshData(),
+        color: const Color(0xFF6C63FF),
+        backgroundColor: Colors.white,
+        onRefresh: _handleRefresh,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(25),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 30),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -720,38 +912,75 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   const Text(
                     "Dompetku",
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF1E1E2C),
+                    ),
                   ),
-                  IconButton(
-                    onPressed: () => finance.clearAll(),
-                    icon: const Icon(Icons.delete_sweep, color: Colors.red),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 10,
+                        ),
+                      ],
+                    ),
+                    child: IconButton(
+                      onPressed: () {
+                        finance.clearAll();
+                        _handleRefresh();
+                      },
+                      icon: const Icon(
+                        Icons.delete_outline,
+                        color: Colors.redAccent,
+                      ),
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
-              _buildBalanceCard(finance),
-              const SizedBox(height: 30),
+              const SizedBox(height: 24),
+              _isLoading
+                  ? const Skeleton(
+                      height: 220,
+                      borderRadius: BorderRadius.all(Radius.circular(30)),
+                    )
+                  : _buildBalanceCard(finance),
+              const SizedBox(height: 36),
               const Text(
                 "Analisis 7 Hari Terakhir",
-                style: TextStyle(fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 18,
+                  color: Color(0xFF1E1E2C),
+                ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
 
-              _buildChart(finance),
+              _isLoading
+                  ? const Skeleton(
+                      height: 240,
+                      borderRadius: BorderRadius.all(Radius.circular(30)),
+                    )
+                  : _buildChart(finance),
 
-              const SizedBox(height: 25),
+              const SizedBox(height: 36),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
                     "Histori Transaksi",
                     style: TextStyle(
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                      color: Color(0xFF1E1E2C),
                     ),
                   ),
-                  TextButton(
-                    onPressed: () => Navigator.push(
+                  InkWell(
+                    onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => const TransactionHistoryScreen(),
@@ -760,16 +989,31 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: const Text(
                       "Lihat Semua",
                       style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.deepPurple,
+                        fontSize: 14,
+                        color: Color(0xFF6C63FF),
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
                 ],
               ),
-              _buildHistoryList(finance),
-              const SizedBox(height: 100),
+              const SizedBox(height: 16),
+              _isLoading
+                  ? Column(
+                      children: [
+                        const Skeleton(
+                          height: 80,
+                          borderRadius: BorderRadius.all(Radius.circular(20)),
+                        ),
+                        const SizedBox(height: 16),
+                        const Skeleton(
+                          height: 80,
+                          borderRadius: BorderRadius.all(Radius.circular(20)),
+                        ),
+                      ],
+                    )
+                  : _buildHistoryList(finance),
+              const SizedBox(height: 120),
             ],
           ),
         ),
@@ -780,30 +1024,64 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildBalanceCard(FinanceProvider finance) {
     final saldo = finance.totalIn - finance.totalOut;
     return Container(
-      padding: const EdgeInsets.all(25),
+      padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Colors.deepPurple, Colors.indigo],
+          colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(30),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF5E5CE6).withOpacity(0.4),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+        ],
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("Sisa Saldo", style: TextStyle(color: Colors.white70)),
-          Text(
-            "Rp ${_formatRupiah(saldo)}",
-            style: const TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
+          const Text(
+            "Total Saldo",
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
             ),
           ),
-          const Divider(color: Colors.white24, height: 30),
+          const SizedBox(height: 8),
+
+          TweenAnimationBuilder<double>(
+            key: ValueKey<int>(_refreshKey),
+            tween: Tween<double>(begin: 0, end: saldo.toDouble()),
+            duration: const Duration(milliseconds: 1500),
+            curve: Curves.easeOutQuart,
+            builder: (context, value, child) {
+              return Text(
+                "Rp ${_formatRupiah(value.toInt())}",
+                style: const TextStyle(
+                  fontSize: 36,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                  letterSpacing: -1,
+                ),
+              );
+            },
+          ),
+
+          const SizedBox(height: 24),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _sumCol("Masuk", finance.totalIn, Colors.greenAccent),
-              _sumCol("Keluar", finance.totalOut, Colors.orangeAccent),
+              _sumColAnim("Pemasukan", finance.totalIn, Colors.greenAccent),
+              Container(
+                width: 1,
+                height: 40,
+                color: Colors.white.withOpacity(0.2),
+              ),
+              _sumColAnim("Pengeluaran", finance.totalOut, Colors.orangeAccent),
             ],
           ),
         ],
@@ -811,21 +1089,51 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _sumCol(String label, int amount, Color color) => Column(
+  Widget _sumColAnim(String label, int amount, Color color) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(label, style: const TextStyle(fontSize: 12, color: Colors.white60)),
       Text(
-        "Rp ${_formatRupiah(amount)}",
-        style: TextStyle(fontWeight: FontWeight.bold, color: color),
+        label,
+        style: const TextStyle(
+          fontSize: 12,
+          color: Colors.white60,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      const SizedBox(height: 4),
+      TweenAnimationBuilder<double>(
+        key: ValueKey<int>(_refreshKey),
+        tween: Tween<double>(begin: 0, end: amount.toDouble()),
+        duration: const Duration(milliseconds: 1500),
+        curve: Curves.easeOutQuart,
+        builder: (context, value, child) {
+          return Text(
+            "Rp ${_formatRupiah(value.toInt())}",
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: color,
+              fontSize: 15,
+            ),
+          );
+        },
       ),
     ],
   );
 
   Widget _buildChart(FinanceProvider finance) {
     if (finance.history.isEmpty) {
-      return const SizedBox(
+      return Container(
         height: 200,
-        child: Center(child: Text("Belum ada data untuk ditampilkan")),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: const Center(
+          child: Text(
+            "Belum ada data 7 hari terakhir",
+            style: TextStyle(color: Colors.grey),
+          ),
+        ),
       );
     }
 
@@ -836,9 +1144,19 @@ class _HomeScreenState extends State<HomeScreen> {
     List<double> outData = List.filled(7, 0.0);
     List<String> xLabels = List.filled(7, '');
 
+    final List<String> hariIndo = [
+      'Sen',
+      'Sel',
+      'Rab',
+      'Kam',
+      'Jum',
+      'Sab',
+      'Min',
+    ];
+
     for (int i = 0; i < 7; i++) {
       final targetDate = justToday.subtract(Duration(days: 6 - i));
-      xLabels[i] = "${targetDate.day}/${targetDate.month}";
+      xLabels[i] = hariIndo[targetDate.weekday - 1];
     }
 
     double maxY = 0;
@@ -873,19 +1191,19 @@ class _HomeScreenState extends State<HomeScreen> {
       barGroups.add(
         BarChartGroupData(
           x: i,
-          barsSpace: 4,
+          barsSpace: 6,
           barRods: [
             BarChartRodData(
-              toY: inData[i],
-              color: Colors.teal,
+              toY: _showChartAnim ? inData[i] : 0,
+              color: const Color(0xFF00C48C),
               width: 10,
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(6),
             ),
             BarChartRodData(
-              toY: outData[i],
-              color: Colors.orange,
+              toY: _showChartAnim ? outData[i] : 0,
+              color: const Color(0xFFFF647C),
               width: 10,
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(6),
             ),
           ],
         ),
@@ -893,13 +1211,51 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return Container(
-      height: 220,
-      padding: const EdgeInsets.only(right: 15, left: 0),
+      height: 240,
+      padding: const EdgeInsets.only(top: 20, right: 10, bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.02),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
       child: BarChart(
         BarChartData(
+          // --- BUBBLE TOOLTIP DIPERBAIKI ---
+          barTouchData: BarTouchData(
+            enabled: true,
+            touchTooltipData: BarTouchTooltipData(
+              getTooltipColor: (group) => const Color(0xFF1E1E2C),
+              tooltipPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+              tooltipMargin: 8,
+              getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                final isIncome = rodIndex == 0;
+                final color = isIncome
+                    ? const Color(0xFF00C48C)
+                    : const Color(0xFFFF647C);
+                final prefix = isIncome ? "+" : "-";
+                return BarTooltipItem(
+                  '$prefix Rp ${_formatRupiah(rod.toY.toInt())}',
+                  TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                );
+              },
+            ),
+          ),
+          // ---------------------------------
           alignment: BarChartAlignment.spaceAround,
           maxY: maxY,
-          barTouchData: BarTouchData(enabled: false),
           titlesData: FlTitlesData(
             show: true,
             topTitles: const AxisTitles(
@@ -911,17 +1267,18 @@ class _HomeScreenState extends State<HomeScreen> {
             bottomTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: 28,
+                reservedSize: 32,
                 getTitlesWidget: (value, meta) {
                   final idx = value.toInt();
                   if (idx >= 0 && idx < 7) {
                     return Padding(
-                      padding: const EdgeInsets.only(top: 8.0),
+                      padding: const EdgeInsets.only(top: 10.0),
                       child: Text(
                         xLabels[idx],
                         style: const TextStyle(
-                          color: Colors.grey,
-                          fontSize: 10,
+                          color: Color(0xFFA0A5BA),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     );
@@ -933,13 +1290,21 @@ class _HomeScreenState extends State<HomeScreen> {
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: 40,
+                reservedSize: 56,
                 interval: maxY / 4 == 0 ? 1 : maxY / 4,
                 getTitlesWidget: (value, meta) {
                   if (value == 0) return const SizedBox.shrink();
-                  return Text(
-                    _compactNumber(value),
-                    style: const TextStyle(color: Colors.grey, fontSize: 10),
+                  return SideTitleWidget(
+                    meta: meta,
+                    space: 8,
+                    child: Text(
+                      _compactNumber(value),
+                      style: const TextStyle(
+                        color: Color(0xFFA0A5BA),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -950,11 +1315,16 @@ class _HomeScreenState extends State<HomeScreen> {
             show: true,
             drawVerticalLine: false,
             horizontalInterval: maxY / 4 == 0 ? 1 : maxY / 4,
-            getDrawingHorizontalLine: (value) =>
-                FlLine(color: Colors.grey.shade200, strokeWidth: 1),
+            getDrawingHorizontalLine: (value) => FlLine(
+              color: Colors.grey.shade100,
+              strokeWidth: 1.5,
+              dashArray: [5, 5],
+            ),
           ),
           barGroups: barGroups,
         ),
+        swapAnimationDuration: const Duration(milliseconds: 1000),
+        swapAnimationCurve: Curves.easeOutQuart,
       ),
     );
   }
@@ -963,132 +1333,177 @@ class _HomeScreenState extends State<HomeScreen> {
     final latestTransactions = finance.history.take(5).toList();
 
     if (latestTransactions.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 20),
-        child: Center(
-          child: Text("Belum ada data", style: TextStyle(color: Colors.grey)),
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Center(
+          child: Text(
+            "Belum ada data transaksi",
+            style: TextStyle(color: Colors.grey),
+          ),
         ),
       );
     }
 
-    return ListView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: latestTransactions.length,
-      itemBuilder: (context, i) {
-        final item = latestTransactions[i];
-        final isIn = item['type'] == 'IN';
-        final amountColor = isIn ? Colors.green : Colors.red;
-        final amountPrefix = isIn ? "Rp" : "-Rp";
-        final arrowIcon = isIn ? Icons.arrow_upward : Icons.arrow_downward;
-        final note = item['note']?.toString() ?? 'Transaksi';
-        final category = item['category']?.toString() ?? 'Other';
-        final dateStr = item['date']?.toString() ?? '';
-        final amount = item['amount'] as int? ?? 0;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.02),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: latestTransactions.length,
+        itemBuilder: (context, i) {
+          final item = latestTransactions[i];
+          final isIn = item['type'] == 'IN';
+          final amountColor = isIn
+              ? const Color(0xFF00C48C)
+              : const Color(0xFFFF647C);
+          final amountPrefix = isIn ? "Rp" : "-Rp";
+          final arrowIcon = isIn ? Icons.arrow_upward : Icons.arrow_downward;
+          final note = item['note']?.toString() ?? 'Transaksi';
+          final category = item['category']?.toString() ?? 'Other';
+          final dateStr = item['date']?.toString() ?? '';
+          final amount = item['amount'] as int? ?? 0;
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 20),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Container(
-                width: 45,
-                height: 45,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.grey.shade300, width: 1),
+          return Container(
+            margin: EdgeInsets.only(
+              bottom: i == latestTransactions.length - 1 ? 0 : 20,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey.shade200, width: 1),
+                  ),
+                  child: Icon(
+                    _getCategoryIcon(category, note),
+                    color: const Color(0xFF1E1E2C),
+                    size: 24,
+                  ),
                 ),
-                child: Icon(
-                  _getCategoryIcon(category),
-                  color: Colors.black87,
-                  size: 22,
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        note,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          color: Color(0xFF1E1E2C),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatDateForTile(dateStr),
+                        style: const TextStyle(
+                          color: Color(0xFFA0A5BA),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 15),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      note,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
+                      "$amountPrefix${_formatRupiah(amount)}",
+                      style: TextStyle(
+                        color: amountColor,
+                        fontWeight: FontWeight.w700,
                         fontSize: 15,
-                        color: Colors.black87,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      _formatDateForTile(dateStr),
-                      style: TextStyle(
-                        color: Colors.grey.shade500,
-                        fontSize: 12,
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: amountColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
                       ),
+                      child: Icon(arrowIcon, color: amountColor, size: 12),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    "$amountPrefix${_formatRupiah(amount)}",
-                    style: TextStyle(
-                      color: amountColor,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: BoxDecoration(
-                      color: amountColor.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Icon(arrowIcon, color: amountColor, size: 12),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
   Widget _buildChatPanel(FinanceProvider finance) {
     return AnimatedAlign(
-      duration: const Duration(milliseconds: 400),
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
       alignment: isChatExpanded ? Alignment.center : Alignment.bottomCenter,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 400),
-        margin: EdgeInsets.all(isChatExpanded ? 0 : 20),
-        height: isChatExpanded ? MediaQuery.of(context).size.height : 60,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        margin: EdgeInsets.all(isChatExpanded ? 0 : 24),
+        height: isChatExpanded ? MediaQuery.of(context).size.height : 65,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(isChatExpanded ? 0 : 30),
-          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 10)],
+          borderRadius: BorderRadius.circular(isChatExpanded ? 0 : 40),
+          boxShadow: isChatExpanded
+              ? null
+              : [
+                  BoxShadow(
+                    color: const Color(0xFF5E5CE6).withOpacity(0.15),
+                    blurRadius: 30,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
         ),
-        child: isChatExpanded ? _buildFullChat(finance) : _buildMiniChat(),
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: isChatExpanded ? _buildFullChat(finance) : _buildMiniChat(),
+        ),
       ),
     );
   }
 
   Widget _buildMiniChat() => InkWell(
-    onTap: () {
-      setState(() => isChatExpanded = true);
-      _scrollToBottom();
-    },
-    child: const Center(
-      child: Text(
-        "💬 Tanya AI Keuangan",
-        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple),
-      ),
+    onTap: () => _toggleChat(true),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: const [
+        Icon(Icons.auto_awesome, color: Color(0xFF5E5CE6), size: 20),
+        SizedBox(width: 10),
+        Text(
+          "Tanya Asisten Finansial",
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF5E5CE6),
+            fontSize: 16,
+          ),
+        ),
+      ],
     ),
   );
 
@@ -1097,99 +1512,191 @@ class _HomeScreenState extends State<HomeScreen> {
         finance.chatHistory.length + (finance.isAiThinking ? 1 : 0);
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: const Color(0xFFF4F6FC),
       appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("Asisten AI", style: TextStyle(fontSize: 16)),
-            if (finance.activeResolvingPending != null)
-              Text(
-                '📝 "${finance.activeResolvingPending!.nama ?? finance.activeResolvingPending!.originalInput}"',
-                style: const TextStyle(
-                  fontSize: 10,
-                  color: Colors.deepPurpleAccent,
+            Row(
+              children: const [
+                Icon(Icons.auto_awesome, color: Color(0xFF5E5CE6), size: 18),
+                SizedBox(width: 8),
+                Text(
+                  "Asisten Finansial",
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1E1E2C),
+                  ),
                 ),
-                overflow: TextOverflow.ellipsis,
+              ],
+            ),
+            if (finance.activeResolvingPending != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  '📝 "${finance.activeResolvingPending!.nama ?? finance.activeResolvingPending!.originalInput}"',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF6C63FF),
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
           ],
         ),
         leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: () => setState(() => isChatExpanded = false),
+          icon: const Icon(
+            Icons.keyboard_arrow_down,
+            color: Color(0xFF1E1E2C),
+            size: 30,
+          ),
+          onPressed: () => _toggleChat(false),
         ),
         actions: const [PendingBadge()],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.all(15),
-              itemCount: listCount,
-              itemBuilder: (context, i) {
-                if (i == finance.chatHistory.length)
-                  return const AnimatedThinkingBubble();
-
-                final m = finance.chatHistory[i];
-                final isAi = m['isAi'] == 1;
-
-                if (isAi && m['receiptData'] != null) {
-                  return Align(
-                    alignment: Alignment.centerLeft,
-                    child: ReceiptCard(receiptJson: m['receiptData']),
-                  );
-                }
-
-                if (isAi &&
-                    m.containsKey('queryResult') &&
-                    m['queryResult'] != null) {
-                  VizType parsedVizType = VizType.auto;
-                  try {
-                    parsedVizType = VizType.values.firstWhere(
-                      (e) =>
-                          e.toString().split('.').last ==
-                          (m['vizType']?.toString() ?? 'auto'),
-                      orElse: () => VizType.auto,
-                    );
-                  } catch (_) {}
-                  return Align(
-                    alignment: Alignment.centerLeft,
-                    child: QueryResultCard(
-                      aiSummary: m['text'] ?? "",
-                      result: m['queryResult'] as RawQueryResult,
-                      vizType: parsedVizType,
-                      originalQuestion: m['originalQuestion'] as String? ?? "",
-                    ),
-                  );
-                }
-
-                return Align(
-                  alignment: isAi
-                      ? Alignment.centerLeft
-                      : Alignment.centerRight,
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 5),
-                    padding: const EdgeInsets.all(12),
-                    constraints: BoxConstraints(
-                      maxWidth: MediaQuery.of(context).size.width * 0.75,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isAi ? Colors.grey[100] : Colors.deepPurple,
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    child: Text(
-                      m['text'] ?? "",
-                      style: TextStyle(
-                        color: isAi ? Colors.black : Colors.white,
-                      ),
-                    ),
+          Column(
+            children: [
+              Expanded(
+                child: ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 20,
                   ),
-                );
-              },
+                  itemCount: listCount,
+                  itemBuilder: (context, i) {
+                    if (i == finance.chatHistory.length)
+                      return const AnimatedThinkingBubble();
+
+                    final m = finance.chatHistory[i];
+                    final isAi = m['isAi'] == 1;
+
+                    if (isAi && m['receiptData'] != null) {
+                      return Align(
+                        alignment: Alignment.centerLeft,
+                        child: ReceiptCard(receiptJson: m['receiptData']),
+                      );
+                    }
+
+                    if (isAi &&
+                        m.containsKey('queryResult') &&
+                        m['queryResult'] != null) {
+                      VizType parsedVizType = VizType.auto;
+                      try {
+                        parsedVizType = VizType.values.firstWhere(
+                          (e) =>
+                              e.toString().split('.').last ==
+                              (m['vizType']?.toString() ?? 'auto'),
+                          orElse: () => VizType.auto,
+                        );
+                      } catch (_) {}
+                      return Align(
+                        alignment: Alignment.centerLeft,
+                        child: QueryResultCard(
+                          aiSummary: m['text'] ?? "",
+                          result: m['queryResult'] as RawQueryResult,
+                          vizType: parsedVizType,
+                          originalQuestion:
+                              m['originalQuestion'] as String? ?? "",
+                        ),
+                      );
+                    }
+
+                    return Align(
+                      alignment: isAi
+                          ? Alignment.centerLeft
+                          : Alignment.centerRight,
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 14,
+                        ),
+                        constraints: BoxConstraints(
+                          maxWidth: MediaQuery.of(context).size.width * 0.75,
+                        ),
+                        decoration: BoxDecoration(
+                          gradient: isAi
+                              ? null
+                              : const LinearGradient(
+                                  colors: [
+                                    Color(0xFF5E5CE6),
+                                    Color(0xFF8C52FF),
+                                  ],
+                                ),
+                          color: isAi ? Colors.white : null,
+                          boxShadow: isAi
+                              ? [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.03),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ]
+                              : [
+                                  BoxShadow(
+                                    color: const Color(
+                                      0xFF5E5CE6,
+                                    ).withOpacity(0.3),
+                                    blurRadius: 10,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                          borderRadius: BorderRadius.only(
+                            topLeft: const Radius.circular(20),
+                            topRight: const Radius.circular(20),
+                            bottomRight: Radius.circular(isAi ? 20 : 5),
+                            bottomLeft: Radius.circular(isAi ? 5 : 20),
+                          ),
+                        ),
+                        child: Text(
+                          m['text'] ?? "",
+                          style: TextStyle(
+                            color: isAi
+                                ? const Color(0xFF1E1E2C)
+                                : Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              _buildInputArea(finance),
+            ],
+          ),
+
+          Positioned(
+            bottom: 110,
+            right: 20,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 200),
+              opacity: _showScrollToBottom ? 1.0 : 0.0,
+              child: IgnorePointer(
+                ignoring: !_showScrollToBottom,
+                child: FloatingActionButton(
+                  mini: true,
+                  backgroundColor: Colors.white,
+                  elevation: 4,
+                  onPressed: _scrollToBottom,
+                  child: const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: Color(0xFF6C63FF),
+                    size: 28,
+                  ),
+                ),
+              ),
             ),
           ),
-          _buildInputArea(finance),
         ],
       ),
     );
@@ -1200,39 +1707,45 @@ class _HomeScreenState extends State<HomeScreen> {
     final isWaiting = finance.isWaitingDirectReply;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(15, 8, 15, 15),
+      color: Colors.transparent,
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (finance.activeResolvingPending != null)
             Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
-                color: isWaiting
-                    ? Colors.deepPurple[100]
-                    : Colors.deepPurple[50],
-                borderRadius: BorderRadius.circular(10),
+                color: isWaiting ? const Color(0xFFE8E7FF) : Colors.white,
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: isWaiting
-                      ? Colors.deepPurple.shade400
-                      : Colors.deepPurple.shade200,
+                      ? const Color(0xFF6C63FF)
+                      : Colors.grey.shade300,
                 ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.03),
+                    blurRadius: 10,
+                  ),
+                ],
               ),
               child: Row(
                 children: [
                   Icon(
                     isWaiting ? Icons.reply : Icons.pending_actions,
-                    size: 14,
-                    color: Colors.deepPurple,
+                    size: 16,
+                    color: const Color(0xFF6C63FF),
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       finance.activeResolvingPending!.aiQuestion,
                       style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.deepPurple,
+                        fontSize: 12,
+                        color: Color(0xFF1E1E2C),
+                        fontWeight: FontWeight.w600,
                       ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -1245,66 +1758,118 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                     child: const Icon(
                       Icons.close,
-                      size: 14,
+                      size: 16,
                       color: Colors.grey,
                     ),
                   ),
                 ],
               ),
             ),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _textController,
-                  decoration: InputDecoration(
-                    hintText: isWaiting
-                        ? "Ketik jawaban langsung..."
-                        : finance.activeResolvingPending != null
-                        ? "Ketik jawaban..."
-                        : "Ketik transaksi atau tanya data...",
-                    filled: true,
-                    fillColor: isWaiting
-                        ? Colors.deepPurple[50]
-                        : Colors.grey[100],
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(25),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                  onSubmitted: (v) {
-                    _processMessage(v);
-                    _textController.clear();
-                  },
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(40),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 20,
+                  offset: const Offset(0, 5),
                 ),
-              ),
-              const SizedBox(width: 10),
-              IconButton(
-                onPressed: () {
-                  if (_textController.text.isNotEmpty) {
-                    _processMessage(_textController.text);
-                    _textController.clear();
-                  } else {
-                    voice.startListening(
-                      onResult: (t, f) {
-                        _textController.text = t;
-                        if (f) {
-                          _processMessage(t);
+              ],
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _textController,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF1E1E2C),
+                    ),
+                    decoration: InputDecoration(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 18,
+                      ),
+                      hintText: isWaiting
+                          ? "Ketik jawaban..."
+                          : finance.activeResolvingPending != null
+                          ? "Ketik jawaban..."
+                          : "Ketik transaksi...",
+                      hintStyle: TextStyle(
+                        color: Colors.grey.shade400,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      border: InputBorder.none,
+                    ),
+                    onChanged: (text) {
+                      setState(() {});
+                    },
+                    onSubmitted: (v) {
+                      _processMessage(v);
+                      _textController.clear();
+                      setState(() {});
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF5E5CE6).withOpacity(0.4),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: IconButton(
+                      onPressed: () {
+                        if (_textController.text.isNotEmpty) {
+                          _processMessage(_textController.text);
                           _textController.clear();
+                          setState(() {});
+                        } else {
+                          voice.startListening(
+                            onResult: (t, f) {
+                              _textController.text = t;
+                              if (f) {
+                                _processMessage(t);
+                                _textController.clear();
+                                setState(() {});
+                              }
+                            },
+                          );
                         }
                       },
-                    );
-                  }
-                },
-                icon: CircleAvatar(
-                  backgroundColor: isWaiting ? Colors.deepPurple : null,
-                  child: Icon(
-                    _textController.text.isNotEmpty ? Icons.send : Icons.mic,
-                    color: isWaiting ? Colors.white : null,
+                      icon: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        transitionBuilder:
+                            (Widget child, Animation<double> animation) {
+                              return ScaleTransition(
+                                scale: animation,
+                                child: child,
+                              );
+                            },
+                        child: Icon(
+                          _textController.text.isNotEmpty
+                              ? Icons.send_rounded
+                              : Icons.mic_rounded,
+                          key: ValueKey<bool>(_textController.text.isNotEmpty),
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),

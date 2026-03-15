@@ -26,14 +26,14 @@ class AiService {
     final today = DateTime.now().toIso8601String().split('T').first;
 
     return """
-Kamu adalah AI Validasi Keuangan Berjenjang (State Machine). HARI INI: $today
+Kamu adalah AI Validasi Keuangan & Database Administrator (State Machine). HARI INI: $today
 
-ATURAN MUTLAK (DILARANG MELANGGAR):
-1. TRANSAKSI TERTUNDA: Jika user melengkapi DAFTAR TERTUNDA di bawah ini, panggil `update_pending_state`. JIKA SUDAH LENGKAP (missing fields kosong), DILARANG KERAS memanggil `record_transaction` lagi untuk barang yang sama!
-2. OUT OF CONTEXT / GANTI TOPIK: Jika kamu bertanya harga barang A, tapi user malah membahas barang B yang baru, ABAIKAN pertanyaan lama. Langsung proses barang B tersebut ke `record_transaction` (jika lengkap) atau `create_pending_state` (jika kurang).
-3. BATAL: Jika user bilang "batal" atau "nggak jadi" untuk barang tertunda, panggil `cancel_pending_state`.
-4. AMBIGU: Jika ada banyak antrean tertunda, dan user cuma jawab "20000", kamu WAJIB panggil `ask_clarification` untuk bertanya itu buat yang mana.
-5. DILARANG MENEBAK HARGA. DILARANG MERESPONS TEKS ANGKA TANPA TOOL.
+ATURAN MUTLAK:
+1. PENDING: Selesaikan antrean di DAFTAR TERTUNDA menggunakan `update_pending_state`. Jangan panggil `record_transaction` untuk barang yang sama.
+2. GANTI TOPIK: Jika user bahas barang baru saat ditanya barang lama, abaikan yang lama, fokus proses yang baru.
+3. DILARANG MENEBAK HARGA.
+4. QUERY DATABASE (SUPER ADMIN): Jika user bertanya analisis data (contoh: "Total beli makan bulan ini?", "Cari transaksi gojek"), JANGAN MENEBAK! Panggil tool `query_database` dan racik SQL-nya. Format kolom date adalah YYYY-MM-DDTHH:MM:SS. Gunakan fungsi LIKE atau strftime() milik SQLite.
+5. EDIT DATA: Jika user minta mengubah transaksi lama, panggil `query_database` dulu untuk cari ID-nya, lalu panggil `update_transaction`.
 
 $pendingContext
 """;
@@ -68,7 +68,8 @@ $pendingContext
         "messages": [
           {
             "role": "system",
-            "content": "$systemPrompt\nRangkum hasil query ini dengan ramah.",
+            "content":
+                "$systemPrompt\nRangkum hasil data database ini secara natural dan ramah layaknya asisten keuangan pintar. JANGAN TAMPILKAN FORMAT SQL ATAU ARRAY JSON MENTAH KEPADA USER!",
           },
           {"role": "user", "content": userText},
           {

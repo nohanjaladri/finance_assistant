@@ -37,8 +37,6 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
               "Transfer_Out",
               "Other",
             ],
-            "description":
-                "Groceries=Sayur/Bahan Pokok, Bills=Tagihan/Listrik/Internet, EWallet=Topup DANA/GoPay, Charity=Sedekah, Transfer_In/Out=Kirim/Terima Uang.",
           },
         },
         "required": ["note", "amount", "type", "category"],
@@ -50,7 +48,7 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
     "function": {
       "name": "create_pending_state",
       "description":
-          """FASE 1 (INISIASI): Gunakan jika input BARU dari user tidak lengkap (misal harga kosong). Buat status pending di database.""",
+          "FASE 1 (INISIASI): Gunakan jika input BARU dari user tidak lengkap (misal harga kosong).",
       "parameters": {
         "type": "object",
         "properties": {
@@ -59,13 +57,8 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
           "missing_fields": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Contoh: ['amount'] atau ['note']",
           },
-          "ai_generated_question": {
-            "type": "string",
-            "description":
-                "Pertanyaan spesifik buatanmu untuk menagih data yang kurang.",
-          },
+          "ai_generated_question": {"type": "string"},
         },
         "required": ["missing_fields", "ai_generated_question"],
       },
@@ -76,7 +69,7 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
     "function": {
       "name": "update_pending_state",
       "description":
-          """FASE 2 (RESOLUSI): Gunakan HANYA UNTUK MENGISI DAFTAR TERTUNDA. Jika setelah ditambah jawaban user datanya sudah lengkap, set remaining_missing_fields = [] dan tool ini akan otomatis mencatatnya!""",
+          "FASE 2 (RESOLUSI): Gunakan HANYA UNTUK MENGISI DAFTAR TERTUNDA.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -86,7 +79,6 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
           "remaining_missing_fields": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "JIKA SUDAH LENGKAP SEMUA, BERIKAN ARRAY KOSONG [].",
           },
           "next_ai_question": {"type": "string"},
         },
@@ -103,8 +95,7 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
     "type": "function",
     "function": {
       "name": "cancel_pending_state",
-      "description":
-          "Gunakan tool ini JIKA user secara eksplisit ingin MEMBATALKAN, MENOLAK, atau MENGHAPUS transaksi yang sedang ditanyakan (contoh: 'nggak jadi', 'batal', 'abaikan yang tadi').",
+      "description": "Membatalkan/menghapus antrean pending jika user menolak.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -118,7 +109,8 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
     "type": "function",
     "function": {
       "name": "update_transaction",
-      "description": "Perbarui transaksi historis.",
+      "description":
+          "Perbarui nominal atau catatan histori berdasarkan ID. Gunakan setelah query_database untuk mencari ID.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -134,16 +126,26 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
     "type": "function",
     "function": {
       "name": "query_database",
-      "description": "Jalankan query SQL untuk mengambil data historis.",
+      "description":
+          """AKSES SUPER-ADMIN: Gunakan tool ini JIKA user bertanya info histori, total pengeluaran, perbandingan, atau mencari ID transaksi untuk diupdate. 
+SKEMA TABEL: transactions(id INTEGER PRIMARY KEY, amount INTEGER, note TEXT, type TEXT (IN/OUT), category TEXT, date TEXT (ISO8601 format)).
+Buat query SQL murni untuk SQLite. Contoh: SELECT SUM(amount) FROM transactions WHERE type='OUT' AND date LIKE '2026-03%';
+DILARANG MENGGUNAKAN DROP ATAU DELETE!""",
       "parameters": {
         "type": "object",
         "properties": {
-          "sql": {"type": "string"},
+          "sql": {
+            "type": "string",
+            "description": "Query SQLite yang valid (Hanya SELECT atau UPDATE)",
+          },
           "viz_type": {
             "type": "string",
             "enum": ["bar", "pie", "line", "table", "auto"],
           },
-          "summary_prompt": {"type": "string"},
+          "summary_prompt": {
+            "type": "string",
+            "description": "Instruksi caramu merangkum hasilnya nanti.",
+          },
         },
         "required": ["sql", "viz_type", "summary_prompt"],
       },
@@ -153,8 +155,7 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
     "type": "function",
     "function": {
       "name": "ask_clarification",
-      "description":
-          "Gunakan JIKA jawaban user SANGAT AMBIGU dan kamu tidak tahu angka tersebut untuk ID pending yang mana.",
+      "description": "Gunakan JIKA jawaban user SANGAT AMBIGU.",
       "parameters": {
         "type": "object",
         "properties": {
