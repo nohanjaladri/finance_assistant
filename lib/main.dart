@@ -2,14 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+// --- IMPORT FIREBASE ---
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+// -----------------------
+
 // --- IMPORT DENGAN STRUKTUR CLEAN ARCHITECTURE ---
 import 'data/services/voice_service.dart';
 import 'presentation/providers/finance_provider.dart';
 import 'presentation/screens/home_screen.dart';
 // -------------------------------------------------
 
-void main() {
+// UBAH main() MENJADI async UNTUK MENUNGGU FIREBASE
+void main() async {
+  // Wajib dipanggil sebelum menggunakan plugin native (seperti Firebase)
   WidgetsFlutterBinding.ensureInitialized();
+
+  // NYALAKAN MESIN FIREBASE! 🔥
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   runApp(
     MultiProvider(
@@ -58,7 +68,7 @@ class _SplashScreenState extends State<SplashScreen> {
       // 2. Inisialisasi Voice Service
       await context.read<VoiceService>().init();
 
-      // 3. Muat Data Keuangan awal
+      // 3. Muat Data Keuangan awal (SQLite lokal)
       await context.read<FinanceProvider>().refreshData();
 
       // Beri sedikit delay agar transisi tidak terlalu kaget (optional)

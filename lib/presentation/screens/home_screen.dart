@@ -63,10 +63,126 @@ class _SkeletonState extends State<Skeleton>
 }
 
 // ==========================================
+// WIDGET CLOUD SYNC ANIMATED INDICATOR
+// ==========================================
+class CloudSyncIndicator extends StatelessWidget {
+  final SyncStatus status;
+  const CloudSyncIndicator({super.key, required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 400),
+      transitionBuilder: (Widget child, Animation<double> animation) {
+        return ScaleTransition(
+          scale: animation,
+          child: FadeTransition(opacity: animation, child: child),
+        );
+      },
+      child: _buildIndicator(),
+    );
+  }
+
+  Widget _buildIndicator() {
+    switch (status) {
+      case SyncStatus.syncing:
+        return Container(
+          key: const ValueKey("syncing"),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.blue,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                "Menyinkronkan",
+                style: TextStyle(
+                  color: Colors.blue.shade700,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        );
+      case SyncStatus.offline:
+        return Container(
+          key: const ValueKey("offline"),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.cloud_off_rounded,
+                color: Colors.redAccent,
+                size: 16,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                "Offline",
+                style: TextStyle(
+                  color: Colors.red.shade700,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        );
+      case SyncStatus.synced:
+      default:
+        return Container(
+          key: const ValueKey("synced"),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.cloud_done_rounded,
+                color: Colors.green,
+                size: 16,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                "Tersimpan",
+                style: TextStyle(
+                  color: Colors.green.shade700,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        );
+    }
+  }
+}
+
+// ==========================================
 // BUBBLE BERPIKIR AI
 // ==========================================
 class AnimatedThinkingBubble extends StatefulWidget {
-  const AnimatedThinkingBubble({super.key});
+  final Color primaryColor;
+  const AnimatedThinkingBubble({super.key, required this.primaryColor});
   @override
   State<AnimatedThinkingBubble> createState() => _AnimatedThinkingBubbleState();
 }
@@ -109,12 +225,12 @@ class _AnimatedThinkingBubbleState extends State<AnimatedThinkingBubble> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(
+            SizedBox(
               width: 14,
               height: 14,
               child: CircularProgressIndicator(
                 strokeWidth: 2.5,
-                color: Color(0xFF6C63FF),
+                color: widget.primaryColor,
               ),
             ),
             const SizedBox(width: 12),
@@ -175,14 +291,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // --- LOGIKA REFRESH DATA & SHIMMER (REVISI TANPA DELAY BUATAN) ---
   Future<void> _handleRefresh() async {
     setState(() {
       _isLoading = true;
       _showChartAnim = false;
     });
 
-    // Murni mengikuti kecepatan pemuatan data dari SQLite
     await context.read<FinanceProvider>().refreshData();
 
     if (mounted) {
@@ -853,9 +967,119 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // --- WIDGET CUSTOM SLIDING SWITCH (TEMA APPLE) ---
+  Widget _buildWorkspaceToggle(FinanceProvider finance, Color primaryColor) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final double switchWidth = constraints.maxWidth;
+          return Stack(
+            children: [
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeInOutCubic,
+                left: finance.isSharedMode ? switchWidth / 2 : 0,
+                child: Container(
+                  width: (switchWidth / 2) - 4,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: primaryColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(25),
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        if (finance.isSharedMode) finance.toggleWorkspace();
+                      },
+                      child: Container(
+                        height: 40,
+                        color: Colors.transparent,
+                        child: Center(
+                          child: Text(
+                            "Pribadi",
+                            style: TextStyle(
+                              color: !finance.isSharedMode
+                                  ? primaryColor
+                                  : Colors.grey.shade400,
+                              fontWeight: !finance.isSharedMode
+                                  ? FontWeight.w800
+                                  : FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () {
+                        if (!finance.isSharedMode) finance.toggleWorkspace();
+                      },
+                      child: Container(
+                        height: 40,
+                        color: Colors.transparent,
+                        child: Center(
+                          child: Text(
+                            "Bersama",
+                            style: TextStyle(
+                              color: finance.isSharedMode
+                                  ? primaryColor
+                                  : Colors.grey.shade400,
+                              fontWeight: finance.isSharedMode
+                                  ? FontWeight.w800
+                                  : FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
+
+    // TEMA BUNGLON: Mengubah warna UI sesuai Mode
+    final Color primaryColor = finance.isSharedMode
+        ? const Color(0xFF009688)
+        : const Color(0xFF5E5CE6);
+    final List<Color> cardGradient = finance.isSharedMode
+        ? [
+            const Color(0xFF00B4DB),
+            const Color(0xFF0083B0),
+          ] // Gradient Teal/Ocean
+        : [
+            const Color(0xFF5E5CE6),
+            const Color(0xFF8C52FF),
+          ]; // Gradient Ungu Premium
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -889,16 +1113,23 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Scaffold(
         backgroundColor: const Color(0xFFF4F6FC),
         body: Stack(
-          children: [_buildDashboard(finance), _buildChatPanel(finance)],
+          children: [
+            _buildDashboard(finance, primaryColor, cardGradient),
+            _buildChatPanel(finance, primaryColor, cardGradient),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildDashboard(FinanceProvider finance) {
+  Widget _buildDashboard(
+    FinanceProvider finance,
+    Color primaryColor,
+    List<Color> cardGradient,
+  ) {
     return SafeArea(
       child: RefreshIndicator(
-        color: const Color(0xFF6C63FF),
+        color: primaryColor,
         backgroundColor: Colors.white,
         onRefresh: _handleRefresh,
         child: SingleChildScrollView(
@@ -918,37 +1149,21 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: Color(0xFF1E1E2C),
                     ),
                   ),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 10,
-                        ),
-                      ],
-                    ),
-                    child: IconButton(
-                      onPressed: () {
-                        finance.clearAll();
-                        _handleRefresh();
-                      },
-                      icon: const Icon(
-                        Icons.delete_outline,
-                        color: Colors.redAccent,
-                      ),
-                    ),
-                  ),
+                  // INDIKATOR AWAN PENGGANTI TOMBOL DELETE
+                  CloudSyncIndicator(status: finance.syncStatus),
                 ],
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
+
+              // SWITCHER MODE DITAMBAHKAN DI SINI
+              _buildWorkspaceToggle(finance, primaryColor),
+
               _isLoading
                   ? const Skeleton(
                       height: 220,
                       borderRadius: BorderRadius.all(Radius.circular(30)),
                     )
-                  : _buildBalanceCard(finance),
+                  : _buildBalanceCard(finance, cardGradient, primaryColor),
               const SizedBox(height: 36),
               const Text(
                 "Analisis 7 Hari Terakhir",
@@ -986,11 +1201,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         builder: (context) => const TransactionHistoryScreen(),
                       ),
                     ),
-                    child: const Text(
+                    child: Text(
                       "Lihat Semua",
                       style: TextStyle(
                         fontSize: 14,
-                        color: Color(0xFF6C63FF),
+                        color: primaryColor,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -1021,20 +1236,26 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildBalanceCard(FinanceProvider finance) {
+  Widget _buildBalanceCard(
+    FinanceProvider finance,
+    List<Color> cardGradient,
+    Color primaryColor,
+  ) {
     final saldo = finance.totalIn - finance.totalOut;
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 500),
+      curve: Curves.easeInOutCubic,
       padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
+        gradient: LinearGradient(
+          colors: cardGradient,
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(30),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF5E5CE6).withOpacity(0.4),
+            color: primaryColor.withOpacity(0.4),
             blurRadius: 24,
             offset: const Offset(0, 12),
           ),
@@ -1226,7 +1447,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: BarChart(
         BarChartData(
-          // --- BUBBLE TOOLTIP DIPERBAIKI ---
           barTouchData: BarTouchData(
             enabled: true,
             touchTooltipData: BarTouchTooltipData(
@@ -1253,7 +1473,6 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
           ),
-          // ---------------------------------
           alignment: BarChartAlignment.spaceAround,
           maxY: maxY,
           titlesData: FlTitlesData(
@@ -1457,7 +1676,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildChatPanel(FinanceProvider finance) {
+  Widget _buildChatPanel(
+    FinanceProvider finance,
+    Color primaryColor,
+    List<Color> cardGradient,
+  ) {
     return AnimatedAlign(
       duration: const Duration(milliseconds: 350),
       curve: Curves.easeOutCubic,
@@ -1474,7 +1697,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ? null
               : [
                   BoxShadow(
-                    color: const Color(0xFF5E5CE6).withOpacity(0.15),
+                    color: primaryColor.withOpacity(0.15),
                     blurRadius: 30,
                     offset: const Offset(0, 10),
                   ),
@@ -1482,24 +1705,26 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 200),
-          child: isChatExpanded ? _buildFullChat(finance) : _buildMiniChat(),
+          child: isChatExpanded
+              ? _buildFullChat(finance, primaryColor, cardGradient)
+              : _buildMiniChat(primaryColor),
         ),
       ),
     );
   }
 
-  Widget _buildMiniChat() => InkWell(
+  Widget _buildMiniChat(Color primaryColor) => InkWell(
     onTap: () => _toggleChat(true),
     child: Row(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: const [
-        Icon(Icons.auto_awesome, color: Color(0xFF5E5CE6), size: 20),
-        SizedBox(width: 10),
+      children: [
+        Icon(Icons.auto_awesome, color: primaryColor, size: 20),
+        const SizedBox(width: 10),
         Text(
           "Tanya Asisten Finansial",
           style: TextStyle(
             fontWeight: FontWeight.w700,
-            color: Color(0xFF5E5CE6),
+            color: primaryColor,
             fontSize: 16,
           ),
         ),
@@ -1507,7 +1732,11 @@ class _HomeScreenState extends State<HomeScreen> {
     ),
   );
 
-  Widget _buildFullChat(FinanceProvider finance) {
+  Widget _buildFullChat(
+    FinanceProvider finance,
+    Color primaryColor,
+    List<Color> cardGradient,
+  ) {
     final int listCount =
         finance.chatHistory.length + (finance.isAiThinking ? 1 : 0);
 
@@ -1520,10 +1749,10 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              children: const [
-                Icon(Icons.auto_awesome, color: Color(0xFF5E5CE6), size: 18),
-                SizedBox(width: 8),
-                Text(
+              children: [
+                Icon(Icons.auto_awesome, color: primaryColor, size: 18),
+                const SizedBox(width: 8),
+                const Text(
                   "Asisten Finansial",
                   style: TextStyle(
                     fontSize: 18,
@@ -1538,9 +1767,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(
                   '📝 "${finance.activeResolvingPending!.nama ?? finance.activeResolvingPending!.originalInput}"',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
-                    color: Color(0xFF6C63FF),
+                    color: primaryColor,
                     fontWeight: FontWeight.w500,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -1572,7 +1801,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   itemCount: listCount,
                   itemBuilder: (context, i) {
                     if (i == finance.chatHistory.length)
-                      return const AnimatedThinkingBubble();
+                      return AnimatedThinkingBubble(primaryColor: primaryColor);
 
                     final m = finance.chatHistory[i];
                     final isAi = m['isAi'] == 1;
@@ -1612,7 +1841,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       alignment: isAi
                           ? Alignment.centerLeft
                           : Alignment.centerRight,
-                      child: Container(
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 500),
                         margin: const EdgeInsets.only(bottom: 12),
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
@@ -1624,12 +1854,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         decoration: BoxDecoration(
                           gradient: isAi
                               ? null
-                              : const LinearGradient(
-                                  colors: [
-                                    Color(0xFF5E5CE6),
-                                    Color(0xFF8C52FF),
-                                  ],
-                                ),
+                              : LinearGradient(colors: cardGradient),
                           color: isAi ? Colors.white : null,
                           boxShadow: isAi
                               ? [
@@ -1641,9 +1866,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ]
                               : [
                                   BoxShadow(
-                                    color: const Color(
-                                      0xFF5E5CE6,
-                                    ).withOpacity(0.3),
+                                    color: primaryColor.withOpacity(0.3),
                                     blurRadius: 10,
                                     offset: const Offset(0, 4),
                                   ),
@@ -1671,7 +1894,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                 ),
               ),
-              _buildInputArea(finance),
+              _buildInputArea(finance, primaryColor, cardGradient),
             ],
           ),
 
@@ -1688,9 +1911,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   backgroundColor: Colors.white,
                   elevation: 4,
                   onPressed: _scrollToBottom,
-                  child: const Icon(
+                  child: Icon(
                     Icons.keyboard_arrow_down_rounded,
-                    color: Color(0xFF6C63FF),
+                    color: primaryColor,
                     size: 28,
                   ),
                 ),
@@ -1702,7 +1925,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildInputArea(FinanceProvider finance) {
+  Widget _buildInputArea(
+    FinanceProvider finance,
+    Color primaryColor,
+    List<Color> cardGradient,
+  ) {
     final voice = Provider.of<VoiceService>(context);
     final isWaiting = finance.isWaitingDirectReply;
 
@@ -1717,12 +1944,10 @@ class _HomeScreenState extends State<HomeScreen> {
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
-                color: isWaiting ? const Color(0xFFE8E7FF) : Colors.white,
+                color: isWaiting ? primaryColor.withOpacity(0.1) : Colors.white,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: isWaiting
-                      ? const Color(0xFF6C63FF)
-                      : Colors.grey.shade300,
+                  color: isWaiting ? primaryColor : Colors.grey.shade300,
                 ),
                 boxShadow: [
                   BoxShadow(
@@ -1736,7 +1961,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Icon(
                     isWaiting ? Icons.reply : Icons.pending_actions,
                     size: 16,
-                    color: const Color(0xFF6C63FF),
+                    color: primaryColor,
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -1814,15 +2039,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: Container(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 500),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
-                      ),
+                      gradient: LinearGradient(colors: cardGradient),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF5E5CE6).withOpacity(0.4),
+                          color: primaryColor.withOpacity(0.4),
                           blurRadius: 8,
                           offset: const Offset(0, 4),
                         ),
