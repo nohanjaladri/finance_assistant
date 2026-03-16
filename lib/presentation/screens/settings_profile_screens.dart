@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../providers/finance_provider.dart';
+import '../../data/services/voice_service.dart'; // IMPORT VOICE SERVICE
 
 // ==========================================
 // 1. LAYAR PROFIL
@@ -47,9 +48,9 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
-            Text(
+            const Text(
               "Dompetku AI User",
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.w800,
                 color: Color(0xFF1E1E2C),
@@ -157,6 +158,7 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
+    final voice = context.watch<VoiceService>(); // BACA STATUS VOICE
     final primaryColor = finance.isSharedMode
         ? const Color(0xFF009688)
         : const Color(0xFF5E5CE6);
@@ -176,6 +178,65 @@ class SettingsScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // FITUR BARU: PENGATURAN SUARA
+            const Text(
+              "Preferensi Aplikasi",
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF1E1E2C),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.02),
+                    blurRadius: 10,
+                  ),
+                ],
+              ),
+              child: SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 10,
+                ),
+                title: const Text(
+                  "Suara Asisten (TTS)",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1E1E2C),
+                  ),
+                ),
+                subtitle: const Text(
+                  "Asisten akan membacakan jawaban dengan suara.",
+                  style: TextStyle(fontSize: 12),
+                ),
+                value: voice.isTtsEnabled,
+                activeColor: primaryColor,
+                onChanged: (val) => voice.toggleTts(val),
+                secondary: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: primaryColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    voice.isTtsEnabled
+                        ? Icons.volume_up_rounded
+                        : Icons.volume_off_rounded,
+                    color: primaryColor,
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 36),
+
+            // PENGATURAN DATA
             const Text(
               "Manajemen Data",
               style: TextStyle(

@@ -426,8 +426,11 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       await finance.addMessage(userText, false);
     } catch (e) {
-      _showErrorSnackBar("Gagal menyimpan pesan.");
-      return;
+      // Menampilkan error asli langsung di gelembung chat HP!
+      await finance.addMessage("DEBUG ERROR:\n$e", true);
+    } finally {
+      finance.setAiThinking(false);
+      _scrollToBottom();
     }
 
     finance.setAiThinking(true);
