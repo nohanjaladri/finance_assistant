@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'; // MENGGUNAKAN SUPABASE
 import '../providers/finance_provider.dart';
-import '../../data/services/voice_service.dart'; // IMPORT VOICE SERVICE
+import '../../data/services/voice_service.dart';
 
 // ==========================================
 // 1. LAYAR PROFIL
@@ -12,9 +12,9 @@ class ProfileScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = Supabase.instance.client.auth.currentUser;
     final email = user?.email ?? "pengguna@email.com";
-    final uid = user?.uid ?? "-";
+    final uid = user?.id ?? "-"; // UID Supabase
     final finance = context.watch<FinanceProvider>();
     final primaryColor = finance.isSharedMode
         ? const Color(0xFF009688)
@@ -158,7 +158,7 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
-    final voice = context.watch<VoiceService>(); // BACA STATUS VOICE
+    final voice = context.watch<VoiceService>();
     final primaryColor = finance.isSharedMode
         ? const Color(0xFF009688)
         : const Color(0xFF5E5CE6);
@@ -178,7 +178,6 @@ class SettingsScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // FITUR BARU: PENGATURAN SUARA
             const Text(
               "Preferensi Aplikasi",
               style: TextStyle(
@@ -216,7 +215,7 @@ class SettingsScreen extends StatelessWidget {
                   style: TextStyle(fontSize: 12),
                 ),
                 value: voice.isTtsEnabled,
-                activeColor: primaryColor,
+                activeThumbColor: primaryColor,
                 onChanged: (val) => voice.toggleTts(val),
                 secondary: Container(
                   padding: const EdgeInsets.all(10),
@@ -236,7 +235,6 @@ class SettingsScreen extends StatelessWidget {
 
             const SizedBox(height: 36),
 
-            // PENGATURAN DATA
             const Text(
               "Manajemen Data",
               style: TextStyle(
@@ -321,7 +319,7 @@ class SettingsScreen extends StatelessWidget {
           ],
         ),
         content: Text(
-          "Apakah Anda yakin ingin menghapus SELURUH data transaksi dan chat di Mode ${finance.isSharedMode ? 'Bersama' : 'Pribadi'} ini?\n\nData akan dihapus dari HP Anda maupun dari Server (Firebase).",
+          "Apakah Anda yakin ingin menghapus SELURUH data transaksi dan chat di Mode ${finance.isSharedMode ? 'Bersama' : 'Pribadi'} ini?\n\nData akan dihapus dari HP Anda maupun dari Server.",
           style: const TextStyle(height: 1.5),
         ),
         actions: [

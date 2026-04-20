@@ -126,14 +126,16 @@ class AmountParser {
     if (cc > 1) return raw.replaceAll(',', '');
     if (dc == 1 && cc == 0) {
       final parts = raw.split('.');
-      if (parts.last.length == 3 && parts.first.length <= 3)
+      if (parts.last.length == 3 && parts.first.length <= 3) {
         return raw.replaceAll('.', '');
+      }
       return parts.first;
     }
     if (cc == 1 && dc == 0) {
       final parts = raw.split(',');
-      if (parts.last.length == 3 && parts.first.length <= 3)
+      if (parts.last.length == 3 && parts.first.length <= 3) {
         return raw.replaceAll(',', '');
+      }
       return parts.first;
     }
     if (dc == 1 && cc == 1) {

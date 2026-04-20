@@ -67,10 +67,6 @@ class SupabaseService {
       'workspace_id': activeSharedUid,
       'is_personal': isPersonal,
     });
-    await _supabase.from('categories').delete().match({
-      'workspace_id': activeSharedUid,
-      'is_personal': isPersonal,
-    });
     await _supabase.from('messages').delete().match({
       'workspace_id': activeSharedUid,
       'is_personal': isPersonal,
@@ -87,10 +83,6 @@ class SupabaseService {
       'transactions',
       where: "sync_status LIKE 'pending_%'",
     );
-    final c = await localDb.query(
-      'categories',
-      where: "sync_status LIKE 'pending_%'",
-    );
     final m = await localDb.query(
       'messages',
       where: "sync_status LIKE 'pending_%'",
@@ -99,7 +91,7 @@ class SupabaseService {
       'pending_requests',
       where: "sync_status LIKE 'pending_%'",
     );
-    return t.length + c.length + m.length + p.length;
+    return t.length + m.length + p.length;
   }
 
   Future<void> pushPendingData({
@@ -111,30 +103,7 @@ class SupabaseService {
     final localDb = await DatabaseHelper.instance.database;
     final isPersonal = !isSharedMode;
 
-    // --- A. DORONG KATEGORI (Master Data) ---
-    final pendingCats = await localDb.query(
-      'categories',
-      where: "sync_status LIKE 'pending_%'",
-    );
-    for (var cat in pendingCats) {
-      final status = cat['sync_status'] as String;
-      Map<String, dynamic> data = Map<String, dynamic>.from(cat);
-      data.remove('sync_status');
-      data['workspace_id'] = activeSharedUid;
-      data['is_personal'] = isPersonal;
-
-      if (status == 'pending_insert' || status == 'pending_update') {
-        await _supabase.from('categories').upsert(data);
-        await localDb.update(
-          'categories',
-          {'sync_status': 'synced'},
-          where: 'id = ?',
-          whereArgs: [cat['id']],
-        );
-      }
-    }
-
-    // --- B. DORONG TRANSAKSI ---
+    // --- A. DORONG TRANSAKSI ---
     final pendingTxs = await localDb.query(
       'transactions',
       where: "sync_status LIKE 'pending_%'",
@@ -154,10 +123,22 @@ class SupabaseService {
           where: 'id = ?',
           whereArgs: [tx['id']],
         );
+      } else if (status == 'pending_delete') {
+        // PERBAIKAN ERROR: Casting tipe data explicitly menjadi Object
+        await _supabase.from('transactions').delete().match({
+          'id': tx['id'] as Object,
+          'workspace_id': activeSharedUid,
+          'is_personal': isPersonal,
+        });
+        await localDb.delete(
+          'transactions',
+          where: 'id = ?',
+          whereArgs: [tx['id']],
+        );
       }
     }
 
-    // --- C. DORONG CHAT AI ---
+    // --- B. DORONG CHAT AI ---
     final pendingMsgs = await localDb.query(
       'messages',
       where: "sync_status LIKE 'pending_%'",
@@ -178,6 +159,7 @@ class SupabaseService {
           whereArgs: [msg['id']],
         );
       } else if (status == 'pending_delete') {
+        // PERBAIKAN ERROR: Casting tipe data explicitly menjadi Object
         await _supabase.from('messages').delete().match({
           'id': msg['id'] as Object,
           'workspace_id': activeSharedUid,
@@ -191,7 +173,7 @@ class SupabaseService {
       }
     }
 
-    // --- D. DORONG REQUEST PENDING ---
+    // --- C. DORONG REQUEST PENDING ---
     final pendingReqs = await localDb.query(
       'pending_requests',
       where: "sync_status LIKE 'pending_%'",
@@ -212,6 +194,7 @@ class SupabaseService {
           whereArgs: [req['id']],
         );
       } else if (status == 'pending_delete') {
+        // PERBAIKAN ERROR: Casting tipe data explicitly menjadi Object
         await _supabase.from('pending_requests').delete().match({
           'id': req['id'] as Object,
           'workspace_id': activeSharedUid,
@@ -237,6 +220,7 @@ class SupabaseService {
 
     _syncSubscription?.unsubscribe();
 
+    // PERBAIKAN ERROR: Sintaks Realtime Subscription Supabase Terbaru (v2)
     _syncSubscription = _supabase
         .channel('public:transactions')
         .onPostgresChanges(
@@ -272,9 +256,20 @@ class SupabaseService {
                 );
                 onDataUpdated();
               }
+            } else if (eventType == PostgresChangeEvent.delete) {
+              final oldRecord = payload.oldRecord;
+              if (oldRecord.isNotEmpty) {
+                final localDb = await DatabaseHelper.instance.database;
+                await localDb.delete(
+                  'transactions',
+                  where: 'id = ?',
+                  whereArgs: [oldRecord['id']],
+                );
+                onDataUpdated();
+              }
             }
           },
         )
-        .subscribe();
+        .subscribe(); // Method subscribe sekarang kosong, data di-handle oleh callback di atas
   }
 }

@@ -37,60 +37,69 @@ class TransactionHistoryScreen extends StatelessWidget {
         text.contains('parkir') ||
         text.contains('bensin') ||
         text.contains('maxim') ||
-        text.contains('tol'))
+        text.contains('tol')) {
       return Icons.two_wheeler;
+    }
     if (text.contains('listrik') ||
         text.contains('pln') ||
         text.contains('token') ||
         text.contains('air') ||
         text.contains('wifi') ||
         text.contains('internet') ||
-        text.contains('indihome'))
+        text.contains('indihome')) {
       return Icons.receipt;
+    }
     if (text.contains('dana') ||
         text.contains('gopay') ||
         text.contains('ovo') ||
         text.contains('shopeepay') ||
         text.contains('topup') ||
-        text.contains('top up'))
+        text.contains('top up')) {
       return Icons.account_balance_wallet;
+    }
     if (text.contains('sayur') ||
         text.contains('buah') ||
         text.contains('beras') ||
         text.contains('pasar') ||
         text.contains('indomaret') ||
-        text.contains('alfamart'))
+        text.contains('alfamart')) {
       return Icons.local_grocery_store;
+    }
     if (text.contains('makan') ||
         text.contains('minum') ||
         text.contains('kopi') ||
         text.contains('bakso') ||
         text.contains('ayam') ||
-        text.contains('warteg'))
+        text.contains('warteg')) {
       return Icons.restaurant;
+    }
     if (text.contains('gaji') ||
         text.contains('bonus') ||
         text.contains('thr') ||
-        text.contains('upah'))
+        text.contains('upah')) {
       return Icons.payments;
+    }
     if (text.contains('pulsa') ||
         text.contains('kuota') ||
         text.contains('paket') ||
         text.contains('axis') ||
-        text.contains('telkomsel'))
+        text.contains('telkomsel')) {
       return Icons.phone_android;
+    }
     if (text.contains('transfer') ||
         text.contains('tf') ||
         text.contains('kirim') ||
-        text.contains('terima'))
+        text.contains('terima')) {
       return Icons.swap_horiz;
+    }
     if (text.contains('qris') || text.contains('scan')) return Icons.qr_code_2;
     if (text.contains('obat') ||
         text.contains('rs') ||
         text.contains('dokter') ||
         text.contains('apotek') ||
-        text.contains('klinik'))
+        text.contains('klinik')) {
       return Icons.medical_services;
+    }
 
     switch (category) {
       case 'Food':

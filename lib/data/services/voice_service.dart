@@ -1,70 +1,65 @@
-import 'package:flutter/foundation.dart';
-import 'package:speech_to_text/speech_to_text.dart';
+import 'package:flutter/material.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class VoiceService extends ChangeNotifier {
-  final SpeechToText _speechToText = SpeechToText();
+  final stt.SpeechToText _speechToText = stt.SpeechToText();
   final FlutterTts _flutterTts = FlutterTts();
+  bool _isSttInitialized = false;
 
-  bool _isListening = false;
-  bool get isListening => _isListening;
-
-  // FITUR BARU: Status aktif/mati suara TTS
+  // Variabel pengontrol suara (Untuk Settings Screen)
   bool _isTtsEnabled = true;
+
+  // Getter
   bool get isTtsEnabled => _isTtsEnabled;
 
-  Future<void> init() async {
-    await _speechToText.initialize();
-    await _flutterTts.setLanguage("id-ID");
-    await _flutterTts.setSpeechRate(0.5);
-    await _flutterTts.setVolume(1.0);
-    await _flutterTts.setPitch(1.0);
-
-    // Memuat pengaturan terakhir dari memori HP
-    final prefs = await SharedPreferences.getInstance();
-    _isTtsEnabled = prefs.getBool('tts_enabled') ?? true;
-  }
-
-  // FITUR BARU: Fungsi untuk mengubah status suara dari Pengaturan
-  Future<void> toggleTts(bool value) async {
+  // Fungsi toggle
+  void toggleTts(bool value) {
     _isTtsEnabled = value;
+    if (!_isTtsEnabled) stop();
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('tts_enabled', value);
-    if (!value) stop(); // Jika dimatikan saat sedang bicara, langsung diam
   }
 
-  void startListening({required Function(String, bool) onResult}) async {
-    if (!_speechToText.isAvailable) return;
-    _isListening = true;
-    notifyListeners();
+  Future<void> init() async {
+    _isSttInitialized = await _speechToText.initialize();
 
-    await _speechToText.listen(
-      onResult: (result) {
-        onResult(result.recognizedWords, result.finalResult);
-        if (result.finalResult) {
-          _isListening = false;
-          notifyListeners();
-        }
-      },
-      localeId: "id_ID",
-    );
-  }
+    // ==========================================
+    // MAGIC TWEAK: MENGHILANGKAN KESAN ROBOTIK
+    // ==========================================
+    await _flutterTts.setLanguage("id-ID");
 
-  void stopListening() async {
-    await _speechToText.stop();
-    _isListening = false;
-    notifyListeners();
+    // Menaikkan nada dasar (Pitch) ke 1.3 membuat suara wanita bawaan Android
+    // terdengar lebih imut, ceria, dan tidak terlalu kaku.
+    await _flutterTts.setPitch(1.3);
+
+    // Memperlambat kecepatan bicara sedikit agar artikulasinya jelas
+    await _flutterTts.setSpeechRate(0.45);
   }
 
   Future<void> speak(String text) async {
-    // FITUR BARU: Cek gembok TTS sebelum bersuara
-    if (!_isTtsEnabled) return;
+    // Jika TTS dimatikan di pengaturan, atau teks kosong, jangan bersuara
+    if (!_isTtsEnabled || text.isEmpty) return;
+
+    // Mesin bawaan OS akan langsung membaca teks secara offline
     await _flutterTts.speak(text);
   }
 
   Future<void> stop() async {
     await _flutterTts.stop();
+  }
+
+  void startListening({required Function(String, bool) onResult}) async {
+    if (!_isSttInitialized) {
+      _isSttInitialized = await _speechToText.initialize();
+    }
+    if (_isSttInitialized) {
+      await stop(); // Suruh AI diam saat Anda mulai berbicara
+      _speechToText.listen(
+        onResult: (result) {
+          onResult(result.recognizedWords, result.finalResult);
+        },
+        localeId: 'id_ID',
+      );
+    }
   }
 }

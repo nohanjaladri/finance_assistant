@@ -1,28 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // IMPORT AUTH
-import 'firebase_options.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'data/services/voice_service.dart';
 import 'presentation/providers/finance_provider.dart';
+import 'data/services/voice_service.dart';
+import 'presentation/screens/auth_screens.dart';
 import 'presentation/screens/home_screen.dart';
-import 'presentation/screens/auth_screens.dart'; // IMPORT LAYAR LOGIN BARU
+import 'presentation/screens/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => VoiceService()),
-        ChangeNotifierProvider(create: (_) => FinanceProvider()),
-      ],
-      child: const MyApp(),
-    ),
+  // Memuat file .env untuk Supabase
+  await dotenv.load(fileName: ".env");
+
+  // Inisialisasi Supabase (Harus di awal, tapi sangat cepat)
+  await Supabase.initialize(
+    url: dotenv.env['SUPABASE_URL'] ?? '',
+    anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
   );
+
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
@@ -30,107 +29,41 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF5E5CE6),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => FinanceProvider()),
+        // 💡 PERBAIKAN: Kita HANYA membuat objeknya saja. Inisialisasinya kita pindah ke Splash Screen!
+        ChangeNotifierProvider(create: (_) => VoiceService()),
+      ],
+      child: MaterialApp(
+        title: 'Dompet Kita',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(primarySwatch: Colors.blue, fontFamily: 'Nunito'),
+        home: const SplashScreen(),
       ),
-      home: const SplashScreen(),
     );
   }
 }
 
-class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
-
-  @override
-  State<SplashScreen> createState() => _SplashScreenState();
-}
-
-class _SplashScreenState extends State<SplashScreen> {
-  @override
-  void initState() {
-    super.initState();
-    _initializeApp();
-  }
-
-  Future<void> _initializeApp() async {
-    try {
-      // 1. Muat Environment & Data Lokal
-      await dotenv.load(fileName: ".env");
-      await context.read<VoiceService>().init();
-      await context.read<FinanceProvider>().refreshData();
-
-      await Future.delayed(const Duration(seconds: 2));
-
-      if (mounted) {
-        // 2. POLISI LALU LINTAS: Cek Status Login Firebase
-        final user = FirebaseAuth.instance.currentUser;
-        Widget nextScreen;
-
-        if (user == null) {
-          // Belum Login -> Lempar ke Layar Login
-          nextScreen = const LoginScreen();
-        } else if (!user.emailVerified) {
-          // Sudah Login tapi belum di-verifikasi emailnya
-          nextScreen = const VerifyEmailScreen();
-        } else {
-          // Aman! Masuk ke Dasbor
-          nextScreen = const HomeScreen();
-        }
-
-        Navigator.of(
-          context,
-        ).pushReplacement(MaterialPageRoute(builder: (_) => nextScreen));
-      }
-    } catch (e) {
-      debugPrint("Initialization Error: $e");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Gagal memuat sistem. Periksa file .env"),
-          ),
-        );
-      }
-    }
-  }
+class AuthWrapper extends StatelessWidget {
+  const AuthWrapper({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        width: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: const [
-            Icon(Icons.account_balance_wallet, size: 80, color: Colors.white),
-            SizedBox(height: 20),
-            Text(
-              "Dompetku AI",
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-            SizedBox(height: 10),
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 30),
-            Text(
-              "Mengamankan sistem...",
-              style: TextStyle(color: Colors.white70),
-            ),
-          ],
-        ),
-      ),
+    return StreamBuilder<AuthState>(
+      stream: Supabase.instance.client.auth.onAuthStateChange,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final session = snapshot.data?.session;
+        if (session != null) {
+          return const HomeScreen();
+        }
+        return const LoginScreen();
+      },
     );
   }
 }

@@ -46,10 +46,14 @@ dependencies:
   dio: ^5.9.2
   intl: ^0.18.1 # Untuk format tanggal dan waktu
   flutter_dotenv: ^5.0.2 # Untuk mengelola variabel lingkungan seperti API key
-  firebase_core: ^4.5.0
-  firebase_database: ^12.1.4
-  firebase_auth: ^6.2.0
   shared_preferences: ^2.5.4
+  supabase_flutter: ^2.12.0
+  audioplayers: ^6.6.0
+  path_provider: ^2.1.5
+  web_socket_channel: ^3.0.3
+  uuid: ^4.5.3
+  crypto: ^3.0.7
+  image_picker: ^1.0.7
 
 dev_dependencies:
   flutter_test:

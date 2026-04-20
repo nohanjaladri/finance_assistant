@@ -17,29 +17,51 @@ DILARANG KERAS digunakan untuk menyelesaikan DAFTAR TRANSAKSI TERTUNDA. Jika kam
             "type": "string",
             "enum": ["IN", "OUT"],
           },
-          "category": {
+          "category_id": {
             "type": "string",
-            "enum": [
-              "Food",
-              "Groceries",
-              "Transport",
-              "Shopping",
-              "Health",
-              "Entertainment",
-              "Bills",
-              "EWallet",
-              "Education",
-              "Charity",
-              "Investment",
-              "Salary",
-              "Business",
-              "Transfer_In",
-              "Transfer_Out",
-              "Other",
-            ],
+            "description": "Kategori transaksi, default 'cat_other_out'",
+          },
+          "friendly_reply": {
+            "type": "string",
+            "description": "Pesan balasan ramah untuk user",
           },
         },
-        "required": ["note", "amount", "type", "category"],
+        "required": ["note", "amount", "type"],
+      },
+    },
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "record_receipt_items",
+      "description":
+          "Gunakan HANYA untuk menyimpan hasil ekstraksi teks/gambar struk belanja yang memiliki banyak barang (multiple items).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "merchant_name": {"type": "string"},
+          "date": {"type": "string"},
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"},
+                "price": {
+                  "type": "string",
+                  "description": "Harga barang dalam format string angka murni",
+                },
+                "category_id": {"type": "string"},
+              },
+              "required": ["name", "price"],
+            },
+          },
+          "total_amount": {
+            "type": "string",
+            "description": "Total harga dalam format string angka murni",
+          },
+        },
+        "required": ["merchant_name", "items", "total_amount"],
       },
     },
   },

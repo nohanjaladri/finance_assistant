@@ -1,6 +1,5 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../data/services/auth_service.dart';
 import 'home_screen.dart';
 
@@ -73,24 +72,29 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _authService = AuthService();
+  final _authService = AuthService(); // INSTANSIASI BENAR
   bool _isLoading = false;
 
   void _login() async {
-    if (_emailController.text.isEmpty || _passwordController.text.isEmpty)
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
       return;
+    }
     setState(() => _isLoading = true);
     try {
       await _authService.signInWithEmailPassword(
         _emailController.text.trim(),
         _passwordController.text,
       );
-      final user = FirebaseAuth.instance.currentUser;
+
+      final user = Supabase.instance.client.auth.currentUser;
       if (mounted) {
-        if (user != null && !user.emailVerified) {
+        if (user != null && user.emailConfirmedAt == null) {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (_) => const VerifyEmailScreen()),
+            MaterialPageRoute(
+              builder: (_) =>
+                  VerifyEmailScreen(email: _emailController.text.trim()),
+            ),
           );
         } else {
           Navigator.pushReplacement(
@@ -250,11 +254,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _emailController.text.trim(),
         _passwordController.text,
       );
-      await _authService.sendEmailVerification(); // Langsung kirim email
+
       if (mounted) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const VerifyEmailScreen()),
+          MaterialPageRoute(
+            builder: (_) =>
+                VerifyEmailScreen(email: _emailController.text.trim()),
+          ),
         );
       }
     } catch (e) {
@@ -350,54 +357,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
 // ==========================================
 // 4. LAYAR VERIFIKASI EMAIL (RUANG TUNGGU)
 // ==========================================
-class VerifyEmailScreen extends StatefulWidget {
-  const VerifyEmailScreen({super.key});
-
-  @override
-  State<VerifyEmailScreen> createState() => _VerifyEmailScreenState();
-}
-
-class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
-  bool _isVerified = false;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _isVerified = FirebaseAuth.instance.currentUser?.emailVerified ?? false;
-
-    if (!_isVerified) {
-      // Auto-Polling: Mengecek status setiap 3 detik
-      _timer = Timer.periodic(
-        const Duration(seconds: 3),
-        (_) => _checkEmailVerified(),
-      );
-    }
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _checkEmailVerified() async {
-    // Reload user data dari Firebase
-    await FirebaseAuth.instance.currentUser?.reload();
-    setState(() {
-      _isVerified = FirebaseAuth.instance.currentUser?.emailVerified ?? false;
-    });
-
-    if (_isVerified) {
-      _timer?.cancel();
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-      }
-    }
-  }
+class VerifyEmailScreen extends StatelessWidget {
+  final String email;
+  const VerifyEmailScreen({super.key, required this.email});
 
   @override
   Widget build(BuildContext context) {
@@ -405,7 +367,6 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
       backgroundColor: Colors.white,
       body: SafeArea(
         child: Center(
-          // --- PERBAIKAN DI SINI: Menambahkan SingleChildScrollView ---
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(30.0),
             child: Column(
@@ -427,7 +388,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  "Kami telah mengirimkan tautan verifikasi ke:\n${FirebaseAuth.instance.currentUser?.email}",
+                  "Kami telah mengirimkan tautan verifikasi ke email Anda.\nSilakan cek inbox atau folder spam.",
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 15,
@@ -436,24 +397,42 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                   ),
                 ),
                 const SizedBox(height: 40),
-                const CircularProgressIndicator(color: Color(0xFF5E5CE6)),
-                const SizedBox(height: 20),
-                const Text(
-                  "Menunggu verifikasi...",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF5E5CE6),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(builder: (_) => const LoginScreen()),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF5E5CE6),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
+                      ),
+                    ),
+                    child: const Text(
+                      "Sudah Verifikasi? Login Sekarang",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
-                const SizedBox(height: 60),
+                const SizedBox(height: 20),
 
                 TextButton.icon(
                   onPressed: () async {
-                    await AuthService().sendEmailVerification();
-                    if (mounted)
+                    await AuthService().sendEmailVerification(email: email);
+                    if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text("Email dikirim ulang!")),
                       );
+                    }
                   },
                   icon: const Icon(Icons.refresh, color: Colors.grey),
                   label: const Text(
@@ -467,11 +446,12 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                 TextButton(
                   onPressed: () async {
                     await AuthService().signOut();
-                    if (mounted)
+                    if (context.mounted) {
                       Navigator.pushReplacement(
                         context,
                         MaterialPageRoute(builder: (_) => const LoginScreen()),
                       );
+                    }
                   },
                   child: const Text(
                     "Batalkan & Logout",
@@ -484,7 +464,6 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
               ],
             ),
           ),
-          // -------------------------------------------------------------
         ),
       ),
     );

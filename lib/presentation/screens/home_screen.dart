@@ -1,28 +1,32 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'settings_profile_screens.dart'; // IMPORT LAYAR BARU
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:image_picker/image_picker.dart';
+import 'settings_profile_screens.dart';
 import '../../core/utils/amount_parser.dart';
 import '../../core/utils/query_validator.dart';
 import '../../data/database/database_helper.dart';
 import '../../data/database/pending_request_helper.dart';
 import '../../data/services/ai_service.dart';
 import '../../data/services/voice_service.dart';
-import '../../data/services/auth_service.dart'; // UNTUK FUNGSI LOGOUT
+import '../../data/services/auth_service.dart';
 import '../providers/finance_provider.dart';
 import '../widgets/query_result_card.dart';
 import '../widgets/pending_reminder_card.dart';
 import '../widgets/receipt_card.dart';
 import 'transaction_history_screen.dart';
-import 'auth_screens.dart'; // UNTUK KEMBALI KE LOGIN
+import 'auth_screens.dart';
 
 // ==========================================
-// WIDGET SKELETON (UNTUK EFEK SHIMMER LOADING)
+// WIDGET SKELETON
 // ==========================================
 class Skeleton extends StatefulWidget {
   final double? width, height;
@@ -67,7 +71,7 @@ class _SkeletonState extends State<Skeleton>
 }
 
 // ==========================================
-// WIDGET CLOUD SYNC ANIMATED INDICATOR
+// WIDGET CLOUD SYNC
 // ==========================================
 class CloudSyncIndicator extends StatelessWidget {
   final SyncStatus status;
@@ -253,17 +257,21 @@ class _AnimatedThinkingBubbleState extends State<AnimatedThinkingBubble> {
   }
 }
 
+// ==========================================
+// HOME SCREEN
+// ==========================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   bool isChatExpanded = false;
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final ImagePicker _picker = ImagePicker();
   DateTime? _lastPressedAt;
 
   bool _showChartAnim = false;
@@ -271,11 +279,16 @@ class _HomeScreenState extends State<HomeScreen> {
   int _refreshKey = 0;
   bool _showScrollToBottom = false;
 
+  late FinanceProvider _financeProvider;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _financeProvider = context.read<FinanceProvider>();
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<FinanceProvider>().addListener(_onFinanceChanged);
+      _financeProvider.addListener(_onFinanceChanged);
     });
 
     _scrollController.addListener(_scrollListener);
@@ -283,6 +296,23 @@ class _HomeScreenState extends State<HomeScreen> {
     Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) setState(() => _showChartAnim = true);
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _financeProvider.refreshData();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _financeProvider.removeListener(_onFinanceChanged);
+    _scrollController.removeListener(_scrollListener);
+    _scrollController.dispose();
+    _textController.dispose();
+    super.dispose();
   }
 
   void _scrollListener() {
@@ -363,15 +393,6 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
-  @override
-  void dispose() {
-    context.read<FinanceProvider>().removeListener(_onFinanceChanged);
-    _scrollController.removeListener(_scrollListener);
-    _scrollController.dispose();
-    _textController.dispose();
-    super.dispose();
-  }
-
   String _getApiKey() => dotenv.maybeGet('GROQ_API_KEY') ?? "";
 
   void _scrollToBottom() {
@@ -386,6 +407,46 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _pickAndProcessImage(ImageSource source) async {
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: source,
+        imageQuality: 80,
+      );
+      if (image == null) return;
+
+      if (!isChatExpanded) _toggleChat(true);
+
+      final bytes = await File(image.path).readAsBytes();
+      final base64Image = base64Encode(bytes);
+
+      final finance = context.read<FinanceProvider>();
+      await finance.addMessage("Memindai dan membaca gambar struk...", false);
+      finance.setAiThinking(true);
+      _scrollToBottom();
+
+      final apiKey = _getApiKey();
+      final aiService = AiService(apiKey: apiKey);
+
+      final extractedText = await aiService.analyzeReceiptImage(base64Image);
+
+      finance.setAiThinking(false);
+
+      if (extractedText.contains("Terjadi kesalahan") ||
+          extractedText.contains("Gagal")) {
+        await finance.addMessage(extractedText, true);
+        return;
+      }
+
+      final userMessage =
+          "Tolong catat struk belanja ini ke database:\n$extractedText";
+      await _processMessage(userMessage, isInternalProcess: true);
+    } catch (e) {
+      _showErrorSnackBar("Gagal memproses gambar: $e");
+      context.read<FinanceProvider>().setAiThinking(false);
+    }
+  }
+
   Future<String> _buildPendingContext(FinanceProvider finance) async {
     final pendings = await finance.getAllPending();
     if (pendings.isEmpty) return "";
@@ -396,14 +457,17 @@ class _HomeScreenState extends State<HomeScreen> {
       final nama = p.nama ?? 'Belum ada';
       final nominal = p.nominal != null ? "Rp ${p.nominal}" : "Belum ada";
       sb.writeln(
-        "[ID: ${p.id}] Barang: $nama | Harga: $nominal | Field Kurang: ${p.missingFields} | Pertanyaan Aktif: '${p.aiQuestion}'",
+        "[ID: ${p.id}] Barang: $nama | Harga: $nominal | Pertanyaan Aktif: '${p.aiQuestion}'",
       );
     }
     sb.writeln("===========================================");
     return sb.toString();
   }
 
-  Future<void> _processMessage(String userText) async {
+  Future<void> _processMessage(
+    String userText, {
+    bool isInternalProcess = false,
+  }) async {
     if (userText.trim().isEmpty) return;
 
     final apiKey = _getApiKey();
@@ -423,14 +487,13 @@ class _HomeScreenState extends State<HomeScreen> {
     voice.stop();
     finance.consumeDirectReply();
 
-    try {
-      await finance.addMessage(userText, false);
-    } catch (e) {
-      // Menampilkan error asli langsung di gelembung chat HP!
-      await finance.addMessage("DEBUG ERROR:\n$e", true);
-    } finally {
-      finance.setAiThinking(false);
-      _scrollToBottom();
+    if (!isInternalProcess) {
+      try {
+        await finance.addMessage(userText, false);
+      } catch (e) {
+        _showErrorSnackBar("Gagal menyimpan pesan.");
+        return;
+      }
     }
 
     finance.setAiThinking(true);
@@ -443,12 +506,17 @@ class _HomeScreenState extends State<HomeScreen> {
       final messages = [
         {"role": "system", "content": systemPrompt},
         ...finance.chatHistory
-            .where((m) => m['queryResult'] == null && m['receiptData'] == null)
+            .where(
+              (m) =>
+                  m['queryResult'] == null &&
+                  m['receiptData'] == null &&
+                  (m['text']?.toString().trim().isNotEmpty ?? false),
+            )
             .takeLast(8)
             .map(
               (m) => {
                 "role": m['isAi'] == 1 ? "assistant" : "user",
-                "content": m['text'] as String? ?? "",
+                "content": m['text'] as String,
               },
             ),
         {"role": "user", "content": userText},
@@ -472,41 +540,20 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       } else {
         String content = message['content'] as String? ?? "";
-
-        bool aiHasPrice = RegExp(
-          r'(Rp\s*\.?\s*\d+|\d{3,})',
-          caseSensitive: false,
-        ).hasMatch(content);
-        if (aiHasPrice && !userHasDigits) {
-          String extractedNote = userText
-              .replaceAll(
-                RegExp(
-                  r'\d+(?:[.,]\d+)?\s*(?:juta|jt|ribu|rb|k\b)?|rp\s*',
-                  caseSensitive: false,
-                ),
-                '',
-              )
-              .trim();
-          if (extractedNote.isEmpty) extractedNote = "Item tersebut";
-
-          await finance.savePendingRequestNew(
-            originalInput: userText,
-            nama: extractedNote,
-            nominal: null,
-            aiQuestion: "Mohon lengkapi nominal untuk '$extractedNote'.",
-            reason: "Penghancur Halusinasi Teks AI",
-            type: 'OUT',
-            missingFields: ['amount'],
-            partialData: {'note': extractedNote},
-          );
-          content = "Mohon lengkapi nominal untuk '$extractedNote'.";
-        }
         await finance.addMessage(content, true);
         if (isChatExpanded) voice.speak(content);
       }
     } catch (e) {
+      String errorMessage = e.toString();
+      if (e is DioException && e.response != null) {
+        try {
+          errorMessage = jsonEncode(e.response?.data);
+        } catch (_) {
+          errorMessage = e.response?.data.toString() ?? errorMessage;
+        }
+      }
       await finance.addMessage(
-        "Maaf, gagal memproses data karena gangguan koneksi.",
+        "Maaf, sepertinya saya tidak mengerti maksudnya.\n\n[INFO ERROR UNTUK DEV]\n$errorMessage",
         true,
       );
     } finally {
@@ -527,9 +574,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }) async {
     final toolResults = <Map<String, dynamic>>[];
     List<Map<String, dynamic>> recordedTxs = [];
-    bool intercepted = false;
-    List<String> interactiveQuestions = [];
     Set<String> processedSignatures = {};
+
+    List<String> otherReplies = [];
+    String? firstTxAiReply;
+
+    bool hasUpdatePending = false;
+    bool hasCancelPending = false;
 
     for (final call in toolCalls) {
       String toolName = call['function']['name'] as String;
@@ -551,7 +602,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ) ??
               0;
         if (!userHasDigits && checkAmount > 0) {
-          intercepted = true;
           toolName = "create_pending_state";
           args['partial_note'] = args['note'];
           args['missing_fields'] = ['amount'];
@@ -577,10 +627,17 @@ class _HomeScreenState extends State<HomeScreen> {
           String sig = "${note.toLowerCase()}_$finalAmount";
           if (!processedSignatures.contains(sig)) {
             processedSignatures.add(sig);
+
             final type = (args['type'] as String? ?? 'OUT').toUpperCase();
-            final category = args['category'] as String? ?? 'Other';
+            final categoryId =
+                args['category_id'] as String? ?? 'cat_other_out';
+
+            if (firstTxAiReply == null || firstTxAiReply.isEmpty) {
+              firstTxAiReply = args['friendly_reply']?.toString().trim();
+            }
+
             try {
-              await finance.addTransaction(finalAmount, note, type, category);
+              await finance.addTransaction(finalAmount, note, type, categoryId);
               result = "success";
               recordedTxs.add({
                 'note': note,
@@ -588,15 +645,64 @@ class _HomeScreenState extends State<HomeScreen> {
                 'type': type,
               });
 
-              if (mounted) setState(() => _showChartAnim = false);
-              Future.delayed(const Duration(milliseconds: 50), () {
-                if (mounted) setState(() => _showChartAnim = true);
-              });
+              if (finance.activeResolvingPending != null) {
+                await finance.completePending(
+                  finance.activeResolvingPending!.id,
+                );
+                finance.setActiveResolvingPending(null);
+                hasUpdatePending = true;
+              } else {
+                final allPendings = await finance.getAllPending();
+                for (var p in allPendings) {
+                  if (p.nama != null &&
+                      (note.toLowerCase().contains(p.nama!.toLowerCase()) ||
+                          p.nama!.toLowerCase().contains(note.toLowerCase()))) {
+                    await finance.completePending(p.id);
+                    hasUpdatePending = true;
+                  }
+                }
+              }
             } catch (_) {}
           } else {
             result = "skipped_duplicate";
           }
         }
+      } else if (toolName == "record_receipt_items") {
+        final merchant = args['merchant_name'] as String? ?? "Toko";
+        final items = args['items'] as List<dynamic>? ?? [];
+        for (var item in items) {
+          final name = item['name'] as String? ?? "Barang";
+          int price = 0;
+          if (item['price'] != null) {
+            price =
+                int.tryParse(
+                  AmountParser.cleanNumberString(item['price'].toString()),
+                ) ??
+                0;
+          }
+          final cat = item['category_id'] as String? ?? "cat_other_out";
+
+          if (price > 0) {
+            String sig = "${name.toLowerCase()}_$price";
+            if (!processedSignatures.contains(sig)) {
+              processedSignatures.add(sig);
+              try {
+                await finance.addTransaction(
+                  price,
+                  "$merchant: $name",
+                  "OUT",
+                  cat,
+                );
+                recordedTxs.add({
+                  'note': "$merchant: $name",
+                  'amount': price,
+                  'type': "OUT",
+                });
+              } catch (_) {}
+            }
+          }
+        }
+        result = "receipt_saved";
       } else if (toolName == "create_pending_state") {
         final partialNote = args['partial_note'] as String? ?? "";
         final aiQuestion =
@@ -623,7 +729,7 @@ class _HomeScreenState extends State<HomeScreen> {
             missingFields: missing,
             partialData: {'note': partialNote},
           );
-          interactiveQuestions.add(aiQuestion);
+          otherReplies.add(aiQuestion);
           result = "pending_created";
         } catch (_) {}
       } else if (toolName == "update_pending_state") {
@@ -634,7 +740,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 .toList() ??
             <String>[];
         String nextQuestion = args['next_ai_question'] as String? ?? "";
-
         int? updatedAmount;
         if (args['updated_amount'] != null)
           updatedAmount = int.tryParse(
@@ -652,20 +757,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   updatedAmount,
                   updatedNote,
                   "OUT",
-                  "Other",
+                  "cat_other_out",
                 );
                 recordedTxs.add({
                   'note': updatedNote,
                   'amount': updatedAmount,
                   'type': "OUT",
                 });
-
-                if (mounted) setState(() => _showChartAnim = false);
-                Future.delayed(const Duration(milliseconds: 50), () {
-                  if (mounted) setState(() => _showChartAnim = true);
-                });
               }
               await finance.completePending(pId);
+              finance.setActiveResolvingPending(null);
+              hasUpdatePending = true;
               result = "resolved";
             } catch (_) {}
           } else {
@@ -677,8 +779,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 jsonEncode(missing),
                 nextQuestion,
               );
-              if (nextQuestion.isNotEmpty)
-                interactiveQuestions.add(nextQuestion);
+              if (nextQuestion.isNotEmpty) otherReplies.add(nextQuestion);
               result = "updated_still_pending";
             } catch (_) {}
           }
@@ -687,29 +788,12 @@ class _HomeScreenState extends State<HomeScreen> {
         int pId = int.tryParse(args['pending_id'].toString()) ?? -1;
         if (pId != -1) {
           await finance.cancelPending(pId);
+          finance.setActiveResolvingPending(null);
+          hasCancelPending = true;
           result = "cancelled";
-        }
-      } else if (toolName == "update_transaction") {
-        final id = int.tryParse(args['id'].toString()) ?? -1;
-        int newAmount =
-            int.tryParse(
-              AmountParser.cleanNumberString(args['new_amount'].toString()),
-            ) ??
-            0;
-        final newNote = args['new_note'] as String?;
-        if (id != -1 && newAmount > 0) {
-          await DatabaseHelper.instance.updateTransaction(
-            id,
-            newAmount,
-            newNote,
-          );
-          await finance.refreshData();
-          result = "success";
         }
       } else if (toolName == "query_database") {
         result = "query_pending";
-      } else if (toolName == "ask_clarification") {
-        result = "clarification_sent";
       }
 
       toolResults.add({
@@ -771,58 +855,80 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    final hasUpdate = toolResults.any(
-      (r) => r['tool_name'] == 'update_transaction',
-    );
-    final hasCancel = toolResults.any(
-      (r) => r['tool_name'] == 'cancel_pending_state',
-    );
+    List<String> finalMessagesToUser = [];
 
-    if (hasUpdate) {
-      await finance.addMessage("Data transaksi berhasil diperbarui! ✓", true);
-      if (isChatExpanded) voice.speak("Data diperbarui");
-    }
-
-    if (hasCancel) {
-      await finance.addMessage(
-        "Transaksi yang tertunda telah dibatalkan. ✓",
-        true,
-      );
-      if (isChatExpanded) voice.speak("Dibatalkan.");
+    if (hasCancelPending) {
+      finalMessagesToUser.add("Oke, transaksi yang tadi kita batalkan ya. 🗑️");
     }
 
     if (recordedTxs.isNotEmpty) {
-      await finance.addMessage("Transaksi Selesai & Dicatat ✓", true);
+      if (recordedTxs.length == 1) {
+        String reply = firstTxAiReply ?? "";
+        if (reply.isEmpty) {
+          final fallbacks = [
+            "Sip! Transaksi untuk ${recordedTxs.first['note']} sebesar Rp ${_formatRupiah(recordedTxs.first['amount'])} sudah aku catat rapi di buku ya! 📝✨",
+            "Oke, ${recordedTxs.first['note']} (Rp ${_formatRupiah(recordedTxs.first['amount'])}) berhasil ditambahkan. 💸",
+          ];
+          reply = fallbacks[Random().nextInt(fallbacks.length)];
+        }
+
+        if (hasUpdatePending) {
+          finalMessagesToUser.add("Sempurna! $reply");
+        } else {
+          finalMessagesToUser.add(reply);
+        }
+      } else {
+        List<String> notes = recordedTxs
+            .map((t) => t['note'].toString())
+            .toList();
+        int totalAmount = recordedTxs.fold(
+          0,
+          (sum, t) => sum + (t['amount'] as int),
+        );
+
+        String joinedNotes;
+        if (notes.length == 2) {
+          joinedNotes = "${notes[0]} dan ${notes[1]}";
+        } else {
+          joinedNotes =
+              "${notes.sublist(0, notes.length - 1).join(', ')}, dan ${notes.last}";
+        }
+
+        finalMessagesToUser.add(
+          "Sip! Transaksi untuk $joinedNotes dengan total Rp ${_formatRupiah(totalAmount)} sudah aku catat semuanya ya! 📝✨",
+        );
+      }
+
       String jsonStr = jsonEncode(recordedTxs);
       await finance.addMessage("RECEIPT_DATA", true, receiptData: jsonStr);
     }
 
-    final clarifyTool = toolResults
-        .where((r) => r['tool_name'] == 'ask_clarification')
-        .firstOrNull;
-    final remainingPendings = await finance.getAllPending();
-
-    if (clarifyTool != null) {
-      final q =
-          clarifyTool['args']['question'] as String? ??
-          "Bisa diperjelas lagi maksudnya?";
-      await finance.addMessage(q, true);
-      if (isChatExpanded) voice.speak(q);
-    } else if (interactiveQuestions.isNotEmpty) {
-      await finance.addMessage(interactiveQuestions.join("\n"), true);
-      if (isChatExpanded && recordedTxs.isEmpty)
-        voice.speak("Mohon lengkapi datanya.");
-    } else if (intercepted) {
-      await finance.addMessage("Berapa nominal/harganya?", true);
-    } else if (remainingPendings.isNotEmpty) {
-      String nextQ = remainingPendings.first.aiQuestion;
-      await finance.addMessage("Masih ada yang tertunda:\n$nextQ", true);
-      if (isChatExpanded) voice.speak("Masih ada transaksi tertunda.");
-    } else if (recordedTxs.isNotEmpty) {
-      if (isChatExpanded) voice.speak("Semua transaksi berhasil dicatat");
-    } else if (!hasUpdate && !hasCancel) {
-      await finance.addMessage("Proses Selesai! ✓", true);
+    if (otherReplies.isNotEmpty) {
+      finalMessagesToUser.addAll(otherReplies);
     }
+
+    if (finalMessagesToUser.isNotEmpty) {
+      final finalReply = finalMessagesToUser.join("\n\n");
+      await finance.addMessage(finalReply, true);
+      if (isChatExpanded) voice.speak(finalReply);
+    }
+
+    // ====== PENTING: REFRESH DATA DASHBOARD SETELAH AI SELESAI ======
+    if (recordedTxs.isNotEmpty || hasCancelPending || hasUpdatePending) {
+      await finance.refreshData();
+      if (mounted) {
+        setState(() {
+          _refreshKey++;
+          _showChartAnim = false;
+        });
+        Future.delayed(const Duration(milliseconds: 50), () {
+          if (mounted) {
+            setState(() => _showChartAnim = true);
+          }
+        });
+      }
+    }
+    // ==================================================================
   }
 
   String _formatRupiah(int amount) {
@@ -847,102 +953,28 @@ class _HomeScreenState extends State<HomeScreen> {
     return value.toInt().toString();
   }
 
-  IconData _getCategoryIcon(String category, String note) {
-    final text = note.toLowerCase();
-    if (text.contains('gojek') ||
-        text.contains('grab') ||
-        text.contains('ojek') ||
-        text.contains('parkir') ||
-        text.contains('bensin') ||
-        text.contains('maxim') ||
-        text.contains('tol'))
-      return Icons.two_wheeler;
-    if (text.contains('listrik') ||
-        text.contains('pln') ||
-        text.contains('token') ||
-        text.contains('air') ||
-        text.contains('wifi') ||
-        text.contains('internet') ||
-        text.contains('indihome'))
-      return Icons.receipt;
-    if (text.contains('dana') ||
-        text.contains('gopay') ||
-        text.contains('ovo') ||
-        text.contains('shopeepay') ||
-        text.contains('topup') ||
-        text.contains('top up'))
-      return Icons.account_balance_wallet;
-    if (text.contains('sayur') ||
-        text.contains('buah') ||
-        text.contains('beras') ||
-        text.contains('pasar') ||
-        text.contains('indomaret') ||
-        text.contains('alfamart'))
-      return Icons.local_grocery_store;
-    if (text.contains('makan') ||
-        text.contains('minum') ||
-        text.contains('kopi') ||
-        text.contains('bakso') ||
-        text.contains('ayam') ||
-        text.contains('warteg'))
-      return Icons.restaurant;
-    if (text.contains('gaji') ||
-        text.contains('bonus') ||
-        text.contains('thr') ||
-        text.contains('upah'))
-      return Icons.payments;
-    if (text.contains('pulsa') ||
-        text.contains('kuota') ||
-        text.contains('paket') ||
-        text.contains('axis') ||
-        text.contains('telkomsel'))
-      return Icons.phone_android;
-    if (text.contains('transfer') ||
-        text.contains('tf') ||
-        text.contains('kirim') ||
-        text.contains('terima'))
-      return Icons.swap_horiz;
-    if (text.contains('qris') || text.contains('scan')) return Icons.qr_code_2;
-    if (text.contains('obat') ||
-        text.contains('rs') ||
-        text.contains('dokter') ||
-        text.contains('apotek') ||
-        text.contains('klinik'))
-      return Icons.medical_services;
-
-    switch (category) {
-      case 'Food':
+  IconData _parseIconData(String iconName) {
+    switch (iconName) {
+      case 'restaurant':
         return Icons.restaurant;
-      case 'Groceries':
-        return Icons.local_grocery_store;
-      case 'Transport':
+      case 'two_wheeler':
         return Icons.two_wheeler;
-      case 'Shopping':
+      case 'shopping_bag':
         return Icons.shopping_bag;
-      case 'Health':
-        return Icons.medical_services;
-      case 'Entertainment':
-        return Icons.sports_esports;
-      case 'Bills':
-        return Icons.receipt;
-      case 'EWallet':
-        return Icons.account_balance_wallet;
-      case 'Education':
-        return Icons.school;
-      case 'Charity':
-        return Icons.volunteer_activism;
-      case 'Investment':
-        return Icons.trending_up;
-      case 'Salary':
+      case 'payments':
         return Icons.payments;
-      case 'Business':
-        return Icons.store;
-      case 'Transfer_In':
-        return Icons.south_west;
-      case 'Transfer_Out':
-        return Icons.north_east;
-      default:
+      case 'receipt_long':
         return Icons.receipt_long;
+      case 'account_balance_wallet':
+        return Icons.account_balance_wallet;
+      case 'medical_services':
+        return Icons.medical_services;
+      case 'school':
+        return Icons.school;
+      case 'trending_up':
+        return Icons.trending_up;
+      default:
+        return Icons.category;
     }
   }
 
@@ -975,7 +1007,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // --- WIDGET CUSTOM SLIDING SWITCH (TEMA APPLE) ---
   Widget _buildWorkspaceToggle(FinanceProvider finance, Color primaryColor) {
     return Container(
       margin: const EdgeInsets.only(bottom: 24),
@@ -1111,9 +1142,9 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       },
       child: Scaffold(
-        key: _scaffoldKey, // KUNCI MENU DRAWER
+        key: _scaffoldKey,
         backgroundColor: const Color(0xFFF4F6FC),
-        drawer: _buildSideMenu(primaryColor, finance), // PASANG DRAWER DI SINI
+        drawer: _buildSideMenu(primaryColor, finance),
         body: Stack(
           children: [
             _buildDashboard(finance, primaryColor, cardGradient),
@@ -1124,11 +1155,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ==========================================
-  // UI: SIDE MENU (DRAWER)
-  // ==========================================
   Widget _buildSideMenu(Color primaryColor, FinanceProvider finance) {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = Supabase.instance.client.auth.currentUser;
     final email = user?.email ?? "pengguna@email.com";
 
     return Drawer(
@@ -1159,7 +1187,6 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('Profil Saya'),
             onTap: () {
               Navigator.pop(context);
-              // MENUJU KE LAYAR PROFIL
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const ProfileScreen()),
@@ -1171,7 +1198,6 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('Pengaturan'),
             onTap: () {
               Navigator.pop(context);
-              // MENUJU KE LAYAR PENGATURAN
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const SettingsScreen()),
@@ -1231,9 +1257,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ==========================================
-  // UI: BOTTOM SHEET DOMPET BERSAMA (5-DIGIT)
-  // ==========================================
   void _showSharedWalletBottomSheet(
     Color primaryColor,
     FinanceProvider finance,
@@ -1247,7 +1270,6 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: Colors.transparent,
       builder: (sheetContext) {
         return StatefulBuilder(
-          // StatefulBuilder agar tombol loading bisa berputar
           builder: (BuildContext context, StateSetter setSheetState) {
             return Container(
               padding: EdgeInsets.only(
@@ -1289,7 +1311,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 30),
 
-                    // BAGIAN 1: KODE SAYA
                     const Text(
                       "Kode Ruangan Anda:",
                       style: TextStyle(
@@ -1357,9 +1378,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const SizedBox(height: 30),
 
-                    // BAGIAN 2: GABUNG KE RUANGAN TEMAN ATAU KEMBALI
                     if (finance.isJoiningOtherRoom) ...[
-                      // JIKA SEDANG MENUMPANG DI RUANG TEMAN
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(16),
@@ -1413,7 +1432,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ] else ...[
-                      // JIKA DI RUANG SENDIRI
                       const Text(
                         "Gabung ke Ruangan Teman:",
                         style: TextStyle(
@@ -1569,7 +1587,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   : _buildBalanceCard(finance, cardGradient, primaryColor),
               const SizedBox(height: 36),
               const Text(
-                "Analisis 7 Hari Terakhir",
+                "Analisis Minggu Ini",
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 18,
@@ -1710,15 +1728,19 @@ class _HomeScreenState extends State<HomeScreen> {
           TweenAnimationBuilder<double>(
             key: ValueKey<int>(_refreshKey),
             tween: Tween<double>(begin: 0, end: saldo.toDouble()),
-            duration: const Duration(milliseconds: 1500),
+            duration: const Duration(milliseconds: 600),
             curve: Curves.easeOutQuart,
             builder: (context, value, child) {
+              final isNegative = value < 0;
+              final prefix = isNegative ? "-Rp " : "Rp ";
+              final textColor = isNegative ? Colors.redAccent : Colors.white;
+
               return Text(
-                "Rp ${_formatRupiah(value.toInt())}",
-                style: const TextStyle(
+                "$prefix${_formatRupiah(value.toInt())}",
+                style: TextStyle(
                   fontSize: 36,
                   fontWeight: FontWeight.bold,
-                  color: Colors.white,
+                  color: textColor,
                   letterSpacing: -1,
                 ),
               );
@@ -1758,7 +1780,7 @@ class _HomeScreenState extends State<HomeScreen> {
       TweenAnimationBuilder<double>(
         key: ValueKey<int>(_refreshKey),
         tween: Tween<double>(begin: 0, end: amount.toDouble()),
-        duration: const Duration(milliseconds: 1500),
+        duration: const Duration(milliseconds: 600),
         curve: Curves.easeOutQuart,
         builder: (context, value, child) {
           return Text(
@@ -1784,7 +1806,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         child: const Center(
           child: Text(
-            "Belum ada data 7 hari terakhir",
+            "Belum ada data minggu ini",
             style: TextStyle(color: Colors.grey),
           ),
         ),
@@ -1792,13 +1814,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final now = DateTime.now();
-    final justToday = DateTime(now.year, now.month, now.day);
+    final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+    final justMonday = DateTime(
+      startOfWeek.year,
+      startOfWeek.month,
+      startOfWeek.day,
+    );
 
     List<double> inData = List.filled(7, 0.0);
     List<double> outData = List.filled(7, 0.0);
-    List<String> xLabels = List.filled(7, '');
 
-    final List<String> hariIndo = [
+    final List<String> xLabels = [
       'Sen',
       'Sel',
       'Rab',
@@ -1807,11 +1833,6 @@ class _HomeScreenState extends State<HomeScreen> {
       'Sab',
       'Min',
     ];
-
-    for (int i = 0; i < 7; i++) {
-      final targetDate = justToday.subtract(Duration(days: 6 - i));
-      xLabels[i] = hariIndo[targetDate.weekday - 1];
-    }
 
     double maxY = 0;
 
@@ -1822,15 +1843,14 @@ class _HomeScreenState extends State<HomeScreen> {
       if (txDate == null) continue;
 
       final justTx = DateTime(txDate.year, txDate.month, txDate.day);
-      final diff = justToday.difference(justTx).inDays;
+      final diff = justTx.difference(justMonday).inDays;
 
       if (diff >= 0 && diff <= 6) {
-        final index = 6 - diff;
         final amt = (tx['amount'] as int).toDouble();
         if (tx['type'] == 'OUT') {
-          outData[index] += amt;
+          outData[diff] += amt;
         } else {
-          inData[index] += amt;
+          inData[diff] += amt;
         }
       }
     }
@@ -2025,10 +2045,15 @@ class _HomeScreenState extends State<HomeScreen> {
               : const Color(0xFFFF647C);
           final amountPrefix = isIn ? "Rp" : "-Rp";
           final arrowIcon = isIn ? Icons.arrow_upward : Icons.arrow_downward;
+
           final note = item['note']?.toString() ?? 'Transaksi';
-          final category = item['category']?.toString() ?? 'Other';
           final dateStr = item['date']?.toString() ?? '';
           final amount = item['amount'] as int? ?? 0;
+
+          final categoryName = item['category_name']?.toString() ?? 'Lainnya';
+          final categoryIconStr =
+              item['category_icon']?.toString() ?? 'receipt_long';
+          final parsedIcon = _parseIconData(categoryIconStr);
 
           return Container(
             margin: EdgeInsets.only(
@@ -2046,7 +2071,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     border: Border.all(color: Colors.grey.shade200, width: 1),
                   ),
                   child: Icon(
-                    _getCategoryIcon(category, note),
+                    parsedIcon,
                     color: const Color(0xFF1E1E2C),
                     size: 24,
                   ),
@@ -2068,10 +2093,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        _formatDateForTile(dateStr),
+                        "$categoryName • ${_formatDateForTile(dateStr)}",
                         style: const TextStyle(
                           color: Color(0xFFA0A5BA),
-                          fontSize: 12,
+                          fontSize: 11,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -2330,7 +2355,6 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildInputArea(finance, primaryColor, cardGradient),
             ],
           ),
-
           Positioned(
             bottom: 110,
             right: 20,
@@ -2437,6 +2461,92 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             child: Row(
               children: [
+                // --- PERBAIKAN UI: Tombol '+' untuk memunculkan Bottom Sheet Kamera & Galeri ---
+                IconButton(
+                  padding: const EdgeInsets.only(left: 8),
+                  icon: Icon(
+                    Icons.add_circle_outline_rounded,
+                    color: primaryColor.withOpacity(0.8),
+                    size: 28,
+                  ),
+                  onPressed: () {
+                    showModalBottomSheet(
+                      context: context,
+                      backgroundColor: Colors.transparent,
+                      builder: (bottomSheetContext) => Container(
+                        padding: const EdgeInsets.only(
+                          top: 10,
+                          bottom: 30,
+                          left: 20,
+                          right: 20,
+                        ),
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.vertical(
+                            top: Radius.circular(24),
+                          ),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 5,
+                              margin: const EdgeInsets.only(bottom: 20),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade300,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            ListTile(
+                              leading: Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: primaryColor.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.camera_alt_rounded,
+                                  color: primaryColor,
+                                ),
+                              ),
+                              title: const Text(
+                                "Ambil dari Kamera",
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              onTap: () {
+                                Navigator.pop(bottomSheetContext);
+                                _pickAndProcessImage(ImageSource.camera);
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            ListTile(
+                              leading: Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: primaryColor.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.photo_library_rounded,
+                                  color: primaryColor,
+                                ),
+                              ),
+                              title: const Text(
+                                "Pilih dari Galeri",
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              onTap: () {
+                                Navigator.pop(bottomSheetContext);
+                                _pickAndProcessImage(ImageSource.gallery);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
                 Expanded(
                   child: TextField(
                     controller: _textController,
@@ -2446,7 +2556,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     decoration: InputDecoration(
                       contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 24,
+                        horizontal: 8,
                         vertical: 18,
                       ),
                       hintText: isWaiting

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/database/database_helper.dart';
 import '../../data/database/pending_request_helper.dart';
-import '../../data/services/firebase_service.dart';
+import '../../data/services/supabase_service.dart';
 
 enum SyncStatus { synced, syncing, offline }
 
@@ -22,8 +22,8 @@ class FinanceProvider extends ChangeNotifier {
   bool isSharedMode = false;
   SyncStatus syncStatus = SyncStatus.synced;
 
-  final FirebaseService _firebaseService = FirebaseService();
-  bool _isFirebaseInitialized = false;
+  final SupabaseService _supabaseService = SupabaseService();
+  bool _isCloudInitialized = false;
 
   String activeSharedUid = '';
   String myRoomCode = 'MEMUAT...';
@@ -37,11 +37,11 @@ class FinanceProvider extends ChangeNotifier {
       activeSharedUid = joinedUid;
       isJoiningOtherRoom = true;
     } else {
-      activeSharedUid = _firebaseService.currentUserUid;
+      activeSharedUid = _supabaseService.currentUserUid;
       isJoiningOtherRoom = false;
     }
 
-    myRoomCode = await _firebaseService.getMyRoomCode();
+    myRoomCode = await _supabaseService.getMyRoomCode();
     notifyListeners();
   }
 
@@ -56,7 +56,7 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
     await refreshData();
 
-    _firebaseService.listenToWorkspace(
+    _supabaseService.listenToWorkspace(
       isSharedMode: isSharedMode,
       activeSharedUid: activeSharedUid,
       onDataUpdated: () {
@@ -64,12 +64,12 @@ class FinanceProvider extends ChangeNotifier {
       },
     );
 
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<bool> joinSharedRoom(String code) async {
     try {
-      final targetUid = await _firebaseService.resolveRoomCode(code);
+      final targetUid = await _supabaseService.resolveRoomCode(code);
       if (targetUid == null) return false;
 
       final prefs = await SharedPreferences.getInstance();
@@ -85,7 +85,7 @@ class FinanceProvider extends ChangeNotifier {
 
       await DatabaseHelper.instance.clearAllData();
 
-      _firebaseService.listenToWorkspace(
+      _supabaseService.listenToWorkspace(
         isSharedMode: isSharedMode,
         activeSharedUid: activeSharedUid,
         onDataUpdated: () {
@@ -94,7 +94,7 @@ class FinanceProvider extends ChangeNotifier {
       );
 
       await refreshData();
-      _syncWithFirebase();
+      _syncWithCloud();
       return true;
     } catch (e) {
       return false;
@@ -105,12 +105,12 @@ class FinanceProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('joined_room_uid');
 
-    activeSharedUid = _firebaseService.currentUserUid;
+    activeSharedUid = _supabaseService.currentUserUid;
     isJoiningOtherRoom = false;
 
     await DatabaseHelper.instance.clearAllData();
 
-    _firebaseService.listenToWorkspace(
+    _supabaseService.listenToWorkspace(
       isSharedMode: isSharedMode,
       activeSharedUid: activeSharedUid,
       onDataUpdated: () {
@@ -119,50 +119,43 @@ class FinanceProvider extends ChangeNotifier {
     );
 
     await refreshData();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
-  // ========================================================
-  // JEMBATAN RESET DATABASE TOTAL
-  // ========================================================
   Future<void> wipeEntireDatabase() async {
-    // 1. Serang Server Firebase Dahulu
-    await _firebaseService.wipeEntireWorkspace(
+    await _supabaseService.wipeEntireWorkspace(
       isSharedMode: isSharedMode,
       activeSharedUid: activeSharedUid,
     );
 
-    // 2. Jika Firebase sukses, serang SQLite Lokal
     await DatabaseHelper.instance.clearAllData();
 
-    // 3. Reset state Provider
     activeResolvingPending = null;
     pendingToFollowUp = null;
     isWaitingDirectReply = false;
 
-    // 4. Perbarui UI
     await refreshData();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
-  // ========================================================
 
-  Future<void> _syncWithFirebase() async {
+  Future<void> _syncWithCloud() async {
     syncStatus = SyncStatus.syncing;
     notifyListeners();
 
     try {
-      await _firebaseService.pushPendingData(
+      await _supabaseService.pushPendingData(
         isSharedMode: isSharedMode,
         activeSharedUid: activeSharedUid,
       );
 
-      int sisaAntrean = await _firebaseService.getPendingCount();
+      int sisaAntrean = await _supabaseService.getPendingCount();
       if (sisaAntrean == 0) {
         syncStatus = SyncStatus.synced;
       } else {
         syncStatus = SyncStatus.offline;
       }
     } catch (e) {
+      print("ERROR SINKRONISASI: $e");
       syncStatus = SyncStatus.offline;
     }
 
@@ -177,16 +170,17 @@ class FinanceProvider extends ChangeNotifier {
 
   Future<void> refreshData() async {
     try {
-      final txs = await DatabaseHelper.instance.getAllTransactions();
+      // 💡 MAGIC HAPPENS HERE: Kita hanya mengambil data dari View Etalase Kaca!
+      final txs = await DatabaseHelper.instance.getAllTransactionsView();
       final msgs = await DatabaseHelper.instance.getMessages(limit: 30);
 
       int tempIn = 0, tempOut = 0;
       for (var tx in txs) {
         final amt = tx['amount'] as int;
         final type = tx['type'].toString().trim().toUpperCase();
-        if (type == 'IN')
+        if (type == 'IN') {
           tempIn += amt;
-        else if (type == 'OUT')
+        } else if (type == 'OUT')
           tempOut += amt;
       }
 
@@ -196,44 +190,50 @@ class FinanceProvider extends ChangeNotifier {
       chatHistory = msgs.reversed.toList();
       await _syncPendingCount();
 
-      if (!_isFirebaseInitialized) {
-        _isFirebaseInitialized = true;
+      if (!_isCloudInitialized) {
+        _isCloudInitialized = true;
         await _initSharingState();
-        _firebaseService.listenToWorkspace(
+        _supabaseService.listenToWorkspace(
           isSharedMode: isSharedMode,
           activeSharedUid: activeSharedUid,
           onDataUpdated: () {
             refreshData();
           },
         );
-        _syncWithFirebase();
+        _syncWithCloud();
       }
 
       notifyListeners();
     } catch (_) {}
   }
 
+  // 💡 Penyesuaian ke addTransactionV2 (menggunakan Category ID)
   Future<void> addTransaction(
     int amount,
     String note,
     String type,
-    String category,
+    String categoryId,
   ) async {
-    await DatabaseHelper.instance.addTransaction(amount, note, type, category);
+    await DatabaseHelper.instance.addTransactionV2(
+      amount,
+      note,
+      type,
+      categoryId,
+    );
     await refreshData();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<void> deleteTransactionManual(int id) async {
     await DatabaseHelper.instance.deleteTransaction(id);
     await refreshData();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<void> updateTransactionManual(int id, int amount, String note) async {
     await DatabaseHelper.instance.updateTransaction(id, amount, note);
     await refreshData();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<void> addMessage(String text, bool isAi, {String? receiptData}) async {
@@ -243,7 +243,7 @@ class FinanceProvider extends ChangeNotifier {
       receiptData: receiptData,
     );
     await refreshData();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<void> addQueryResultMessage({
@@ -262,7 +262,7 @@ class FinanceProvider extends ChangeNotifier {
     });
     await _syncPendingCount();
     notifyListeners();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<List<PendingRequest>> getAllPending() async {
@@ -276,7 +276,7 @@ class FinanceProvider extends ChangeNotifier {
     isWaitingDirectReply = false;
     await _syncPendingCount();
     notifyListeners();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<void> cancelPending(int pendingId) async {
@@ -286,7 +286,7 @@ class FinanceProvider extends ChangeNotifier {
     isWaitingDirectReply = false;
     await _syncPendingCount();
     notifyListeners();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   void setActiveResolvingPending(PendingRequest? pending) {
@@ -339,7 +339,7 @@ class FinanceProvider extends ChangeNotifier {
     );
     await _syncPendingCount();
     notifyListeners();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<void> updatePendingState(
@@ -361,7 +361,7 @@ class FinanceProvider extends ChangeNotifier {
     await db.update('pending_requests', data, where: 'id = ?', whereArgs: [id]);
     await _syncPendingCount();
     notifyListeners();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 
   Future<RawQueryResult> executeQuery(String validatedSql) {
@@ -379,6 +379,6 @@ class FinanceProvider extends ChangeNotifier {
     pendingToFollowUp = null;
     isWaitingDirectReply = false;
     await refreshData();
-    _syncWithFirebase();
+    _syncWithCloud();
   }
 }

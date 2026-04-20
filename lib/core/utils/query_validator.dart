@@ -65,7 +65,14 @@ class QueryValidator {
   ];
 
   // 🏦 Tabel yang DIIZINKAN untuk di-query
-  static const _allowedTables = ['transactions', 'messages'];
+  // ---> TEMPAT YANG ERROR SEBELUMNYA <---
+  // Menambahkan 'v_transactions_full' agar AI diizinkan membaca dari Etalase View
+  static const _allowedTables = [
+    'transactions',
+    'messages',
+    'v_transactions_full',
+    'categories',
+  ];
 
   /// Validasi utama — mengembalikan [QueryValidationResult]
   static QueryValidationResult validate(String sql) {
