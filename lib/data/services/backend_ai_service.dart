@@ -23,7 +23,7 @@ class BackendAiResponse {
 
 class BackendAiService {
   final Dio _dio = Dio();
-  final String baseUrl = "http://127.0.0.1:8000";
+  final String baseUrl = "https://finance-assistant-gilt.vercel.app";
 
   Future<BackendAiResponse?> sendMessage(String message, {String userId = "default_user"}) async {
     try {
