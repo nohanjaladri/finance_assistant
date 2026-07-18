@@ -13,7 +13,6 @@ import '../../data/models/transaction_model.dart';
 import '../../data/services/supabase_service.dart';
 import '../../data/services/voice_service.dart';
 import '../providers/finance_provider.dart';
-import '../controllers/ai_chat_controller.dart';
 import '../widgets/query_result_card.dart';
 import '../widgets/receipt_card.dart';
 import 'auth_screens.dart';
@@ -144,17 +143,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _textController.clear();
 
     final finance = context.read<FinanceProvider>();
-    final voice = context.read<VoiceService>();
-
-    final controller = AiChatController(
-      financeProvider: finance,
-      voiceService: voice,
-    );
-
-    await controller.processMessage(
-      userText: text,
-      isChatVisible: _isChatExpanded,
-    );
+    await finance.addMessage(text, false);
+    await finance.addMessage("Fitur AI sedang dinonaktifkan untuk pemeliharaan/perombakan.", true);
     _scrollChatToBottom();
   }
 
