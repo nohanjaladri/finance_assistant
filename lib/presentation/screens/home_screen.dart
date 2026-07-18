@@ -152,7 +152,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _scrollChatToBottom();
 
     try {
-      final response = await BackendAiService().sendMessage(text);
+      final response = await BackendAiService().sendMessage(
+        text,
+        userId: SupabaseService.instance.currentUserId,
+      );
       if (response != null) {
         // Show AI reply
         await finance.addMessage(response.reply, true);
