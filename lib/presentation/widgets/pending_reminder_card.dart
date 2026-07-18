@@ -6,7 +6,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/finance_provider.dart';
-import '../../data/database/pending_request_helper.dart';
+import '../../data/models/pending_model.dart';
 
 // ==========================================
 // BADGE
@@ -84,7 +84,7 @@ class _PendingDialog extends StatefulWidget {
 }
 
 class _PendingDialogState extends State<_PendingDialog> {
-  List<PendingRequest> _pendingList = [];
+  List<PendingModel> _pendingList = [];
   bool _isLoading = true;
   int _lastKnownCount = -1;
 
@@ -217,7 +217,7 @@ class _PendingDialogState extends State<_PendingDialog> {
                           shrinkWrap: true,
                           padding: const EdgeInsets.all(16),
                           itemCount: _pendingList.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          separatorBuilder: (_, _) => const Divider(height: 1),
                           itemBuilder: (context, i) => _PendingItem(
                             pending: _pendingList[i],
                             onComplete: () => _onComplete(_pendingList[i]),
@@ -234,12 +234,12 @@ class _PendingDialogState extends State<_PendingDialog> {
   }
 
   /// ✅ Lengkapi: tutup dialog + inject bubble follow-up ke chat
-  void _onComplete(PendingRequest pending) {
+  void _onComplete(PendingModel pending) {
     context.read<FinanceProvider>().triggerFollowUp(pending);
     Navigator.pop(context);
   }
 
-  Future<void> _onCancel(PendingRequest pending, int index) async {
+  Future<void> _onCancel(PendingModel pending, int index) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -262,7 +262,9 @@ class _PendingDialogState extends State<_PendingDialog> {
     );
 
     if (confirm == true && mounted) {
-      await context.read<FinanceProvider>().cancelPending(pending.id);
+      if (pending.id != null) {
+        await context.read<FinanceProvider>().cancelPending(pending.id!);
+      }
     }
   }
 }
@@ -272,7 +274,7 @@ class _PendingDialogState extends State<_PendingDialog> {
 // ==========================================
 
 class _PendingItem extends StatelessWidget {
-  final PendingRequest pending;
+  final PendingModel pending;
   final VoidCallback onComplete;
   final VoidCallback onCancel;
 
@@ -345,7 +347,7 @@ class _PendingItem extends StatelessWidget {
               ),
               const Spacer(),
               Text(
-                pending.missingFieldsLabel,
+                pending.formattedInputTime,
                 style: const TextStyle(fontSize: 10, color: Colors.grey),
               ),
             ],

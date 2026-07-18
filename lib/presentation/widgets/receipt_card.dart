@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 class ReceiptCard extends StatelessWidget {
-  final String receiptJson;
+  final dynamic receiptData;
 
-  const ReceiptCard({super.key, required this.receiptJson});
+  const ReceiptCard({super.key, required this.receiptData});
 
   String _formatRupiah(int amount) {
     final str = amount.abs().toString();
@@ -18,9 +18,17 @@ class ReceiptCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Map<String, dynamic> data = {};
+    if (receiptData is String) {
+      try {
+        data = jsonDecode(receiptData) as Map<String, dynamic>;
+      } catch (_) {}
+    } else if (receiptData is Map) {
+      data = Map<String, dynamic>.from(receiptData);
+    }
     List<dynamic> items = [];
     try {
-      items = jsonDecode(receiptJson);
+      items = data['transactions'] as List<dynamic>? ?? [];
     } catch (_) {}
 
     if (items.isEmpty) return const SizedBox.shrink();

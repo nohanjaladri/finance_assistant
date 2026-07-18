@@ -1,319 +1,307 @@
-import 'dart:convert';
+/// finance_provider.dart (v2)
+/// State management utama — menggantikan Firebase dengan Supabase
+library;
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../data/database/database_helper.dart';
-import '../../data/database/pending_request_helper.dart';
-import '../../data/services/firebase_service.dart';
+import '../../../data/models/transaction_model.dart';
+import '../../../data/models/pending_model.dart';
+import '../../../data/models/room_model.dart';
+import '../../../data/services/supabase_service.dart';
+import '../../../core/utils/query_validator.dart';
 
-enum SyncStatus { synced, syncing, offline }
+enum SyncStatus { synced, syncing, error }
 
 class FinanceProvider extends ChangeNotifier {
+  // ============================================================
+  // STATE
+  // ============================================================
+  SupabaseService get _db => dbOverride ?? SupabaseService.instance;
+  @visibleForTesting
+  SupabaseService? dbOverride;
+
+  // Transaksi & summary
+  List<TransactionModel> allTransactions = [];
+  List<TransactionModel> tunaiTransactions = [];
+  List<TransactionModel> nonTunaiTransactions = [];
   int totalIn = 0;
   int totalOut = 0;
-  List<Map<String, dynamic>> history = [];
-  List<Map<String, dynamic>> chatHistory = [];
+  int tunaiIn = 0;
+  int nonTunaiIn = 0;
+  int tunaiOut = 0;
+  int nonTunaiOut = 0;
+
+  // Chat
+  // Chat
+  List<Map<String, dynamic>> tunaiChatHistory = [];
+  List<Map<String, dynamic>> nonTunaiChatHistory = [];
+  List<Map<String, dynamic>> sharedChatHistory = [];
+  String _activeChatType = 'tunai';
+
+  String get activeChatType => _activeChatType;
+
+  void setActiveChatType(String type) {
+    if (_activeChatType != type) {
+      _activeChatType = type;
+      notifyListeners();
+    }
+  }
+
+  List<Map<String, dynamic>> get chatHistory {
+    if (isSharingConnected && _activeChatType == 'sharing') {
+      return sharedChatHistory;
+    } else if (_activeChatType == 'non_tunai') {
+      return nonTunaiChatHistory;
+    } else {
+      return tunaiChatHistory;
+    }
+  }
+
+  // AI state
   bool isAiThinking = false;
-
   int pendingCount = 0;
-  PendingRequest? activeResolvingPending;
-  bool isWaitingDirectReply = false;
-  PendingRequest? pendingToFollowUp;
 
-  bool isSharedMode = false;
+  // Sharing / Room
+  bool isSharingEnabled = false; // toggle dari settings
+  bool isSharingConnected = false; // sudah join room
+  RoomModel? activeRoom;
+  List<TransactionModel> sharedTransactions = [];
+  int sharedTotalIn = 0;
+  int sharedTotalOut = 0;
+
+  // Profile info
+  String myRoomCode = '';
+
+  // Sync
   SyncStatus syncStatus = SyncStatus.synced;
 
-  final FirebaseService _firebaseService = FirebaseService();
-  bool _isFirebaseInitialized = false;
+  // Context for AI
+  Map<String, dynamic> financialSummary = {};
 
-  String activeSharedUid = '';
-  String myRoomCode = 'MEMUAT...';
-  bool isJoiningOtherRoom = false;
+  // ============================================================
+  // INIT & REFRESH
+  // ============================================================
 
-  Future<void> _initSharingState() async {
-    final prefs = await SharedPreferences.getInstance();
-    final joinedUid = prefs.getString('joined_room_uid');
-
-    if (joinedUid != null && joinedUid.isNotEmpty) {
-      activeSharedUid = joinedUid;
-      isJoiningOtherRoom = true;
-    } else {
-      activeSharedUid = _firebaseService.currentUserUid;
-      isJoiningOtherRoom = false;
-    }
-
-    myRoomCode = await _firebaseService.getMyRoomCode();
-    notifyListeners();
+  Future<void> initialize() async {
+    await _loadSharingPrefs();
+    await refreshAll();
   }
 
-  void toggleWorkspace() async {
-    isSharedMode = !isSharedMode;
-    DatabaseHelper.instance.setMode(isSharedMode);
-
-    if (isSharedMode && activeSharedUid.isEmpty) {
-      await _initSharingState();
-    }
-
-    notifyListeners();
-    await refreshData();
-
-    _firebaseService.listenToWorkspace(
-      isSharedMode: isSharedMode,
-      activeSharedUid: activeSharedUid,
-      onDataUpdated: () {
-        refreshData();
-      },
-    );
-
-    _syncWithFirebase();
-  }
-
-  Future<bool> joinSharedRoom(String code) async {
+  Future<void> refreshAll() async {
     try {
-      final targetUid = await _firebaseService.resolveRoomCode(code);
-      if (targetUid == null) return false;
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('joined_room_uid', targetUid);
-
-      activeSharedUid = targetUid;
-      isJoiningOtherRoom = true;
-
-      if (!isSharedMode) {
-        isSharedMode = true;
-        DatabaseHelper.instance.setMode(true);
-      }
-
-      await DatabaseHelper.instance.clearAllData();
-
-      _firebaseService.listenToWorkspace(
-        isSharedMode: isSharedMode,
-        activeSharedUid: activeSharedUid,
-        onDataUpdated: () {
-          refreshData();
-        },
-      );
-
-      await refreshData();
-      _syncWithFirebase();
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  Future<void> leaveSharedRoom() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('joined_room_uid');
-
-    activeSharedUid = _firebaseService.currentUserUid;
-    isJoiningOtherRoom = false;
-
-    await DatabaseHelper.instance.clearAllData();
-
-    _firebaseService.listenToWorkspace(
-      isSharedMode: isSharedMode,
-      activeSharedUid: activeSharedUid,
-      onDataUpdated: () {
-        refreshData();
-      },
-    );
-
-    await refreshData();
-    _syncWithFirebase();
-  }
-
-  // ========================================================
-  // JEMBATAN RESET DATABASE TOTAL
-  // ========================================================
-  Future<void> wipeEntireDatabase() async {
-    // 1. Serang Server Firebase Dahulu
-    await _firebaseService.wipeEntireWorkspace(
-      isSharedMode: isSharedMode,
-      activeSharedUid: activeSharedUid,
-    );
-
-    // 2. Jika Firebase sukses, serang SQLite Lokal
-    await DatabaseHelper.instance.clearAllData();
-
-    // 3. Reset state Provider
-    activeResolvingPending = null;
-    pendingToFollowUp = null;
-    isWaitingDirectReply = false;
-
-    // 4. Perbarui UI
-    await refreshData();
-    _syncWithFirebase();
-  }
-  // ========================================================
-
-  Future<void> _syncWithFirebase() async {
-    syncStatus = SyncStatus.syncing;
-    notifyListeners();
-
-    try {
-      await _firebaseService.pushPendingData(
-        isSharedMode: isSharedMode,
-        activeSharedUid: activeSharedUid,
-      );
-
-      int sisaAntrean = await _firebaseService.getPendingCount();
-      if (sisaAntrean == 0) {
-        syncStatus = SyncStatus.synced;
-      } else {
-        syncStatus = SyncStatus.offline;
-      }
-    } catch (e) {
-      syncStatus = SyncStatus.offline;
-    }
-
-    notifyListeners();
-  }
-
-  Future<void> _syncPendingCount() async {
-    try {
-      pendingCount = await PendingRequestHelper.instance.countPending();
-    } catch (_) {}
-  }
-
-  Future<void> refreshData() async {
-    try {
-      final txs = await DatabaseHelper.instance.getAllTransactions();
-      final msgs = await DatabaseHelper.instance.getMessages(limit: 30);
-
-      int tempIn = 0, tempOut = 0;
-      for (var tx in txs) {
-        final amt = tx['amount'] as int;
-        final type = tx['type'].toString().trim().toUpperCase();
-        if (type == 'IN')
-          tempIn += amt;
-        else if (type == 'OUT')
-          tempOut += amt;
-      }
-
-      totalIn = tempIn;
-      totalOut = tempOut;
-      history = List.from(txs);
-      chatHistory = msgs.reversed.toList();
-      await _syncPendingCount();
-
-      if (!_isFirebaseInitialized) {
-        _isFirebaseInitialized = true;
-        await _initSharingState();
-        _firebaseService.listenToWorkspace(
-          isSharedMode: isSharedMode,
-          activeSharedUid: activeSharedUid,
-          onDataUpdated: () {
-            refreshData();
-          },
-        );
-        _syncWithFirebase();
-      }
-
+      syncStatus = SyncStatus.syncing;
       notifyListeners();
-    } catch (_) {}
+
+      await Future.wait([
+        _loadPersonalTransactions(),
+        _loadChatMessages(),
+        _loadPendingCount(),
+        _loadProfile(),
+        _loadFinancialSummary(),
+      ]);
+
+      if (isSharingConnected && activeRoom != null) {
+        await _loadSharedTransactions();
+      }
+
+      syncStatus = SyncStatus.synced;
+    } catch (e) {
+      debugPrint('refreshAll error: $e');
+      syncStatus = SyncStatus.error;
+    }
+    notifyListeners();
   }
 
-  Future<void> addTransaction(
-    int amount,
-    String note,
-    String type,
-    String category,
-  ) async {
-    await DatabaseHelper.instance.addTransaction(amount, note, type, category);
-    await refreshData();
-    _syncWithFirebase();
+  Future<void> _loadPersonalTransactions() async {
+    final txs = await _db.getPersonalTransactions(limit: 100);
+    allTransactions = txs;
+    tunaiTransactions = txs
+        .where((t) => t.paymentMethod == PaymentMethod.tunai)
+        .toList();
+    nonTunaiTransactions = txs
+        .where((t) => t.paymentMethod == PaymentMethod.nonTunai)
+        .toList();
+
+    int tempIn = 0, tempOut = 0, tempTunai = 0, tempNonTunai = 0;
+    int tempTunaiIn = 0, tempNonTunaiIn = 0;
+    for (final tx in txs) {
+      if (tx.type == TransactionType.income) {
+        tempIn += tx.amount;
+        if (tx.paymentMethod == PaymentMethod.tunai) {
+          tempTunaiIn += tx.amount;
+        } else {
+          tempNonTunaiIn += tx.amount;
+        }
+      } else {
+        tempOut += tx.amount;
+        if (tx.paymentMethod == PaymentMethod.tunai) {
+          tempTunai += tx.amount;
+        } else {
+          tempNonTunai += tx.amount;
+        }
+      }
+    }
+    totalIn = tempIn;
+    totalOut = tempOut;
+    tunaiIn = tempTunaiIn;
+    nonTunaiIn = tempNonTunaiIn;
+    tunaiOut = tempTunai;
+    nonTunaiOut = tempNonTunai;
   }
 
-  Future<void> deleteTransactionManual(int id) async {
-    await DatabaseHelper.instance.deleteTransaction(id);
-    await refreshData();
-    _syncWithFirebase();
-  }
-
-  Future<void> updateTransactionManual(int id, int amount, String note) async {
-    await DatabaseHelper.instance.updateTransaction(id, amount, note);
-    await refreshData();
-    _syncWithFirebase();
-  }
-
-  Future<void> addMessage(String text, bool isAi, {String? receiptData}) async {
-    await DatabaseHelper.instance.insertMessage(
-      text,
-      isAi,
-      receiptData: receiptData,
+  Future<void> _loadSharedTransactions() async {
+    if (activeRoom == null) return;
+    final txs = await _db.getSharedTransactions(
+      roomId: activeRoom!.id,
+      limit: 100,
     );
-    await refreshData();
-    _syncWithFirebase();
+    sharedTransactions = txs;
+    int tempIn = 0, tempOut = 0;
+    for (final tx in txs) {
+      if (tx.type == TransactionType.income) {
+        tempIn += tx.amount;
+      } else {
+        tempOut += tx.amount;
+      }
+    }
+    sharedTotalIn = tempIn;
+    sharedTotalOut = tempOut;
   }
 
-  Future<void> addQueryResultMessage({
-    required String aiSummary,
-    required RawQueryResult queryResult,
-    required String vizType,
-    required String originalQuestion,
+  Future<void> _loadChatMessages() async {
+    final tunaiMsgs = await _db.getChatMessages(chatType: 'tunai', limit: 30);
+    tunaiChatHistory = tunaiMsgs.reversed.toList();
+
+    final nonTunaiMsgs = await _db.getChatMessages(chatType: 'non_tunai', limit: 30);
+    nonTunaiChatHistory = nonTunaiMsgs.reversed.toList();
+
+    if (isSharingConnected && activeRoom != null) {
+      final sharedMsgs = await _db.getChatMessages(roomId: activeRoom!.id, limit: 30);
+      sharedChatHistory = sharedMsgs.reversed.toList();
+    } else {
+      sharedChatHistory = [];
+    }
+  }
+
+  Future<void> _loadPendingCount() async {
+    pendingCount = await _db.getPendingCount();
+  }
+
+  Future<void> _loadProfile() async {
+    myRoomCode = await _db.getMyRoomCode();
+  }
+
+  Future<void> _loadFinancialSummary() async {
+    financialSummary = await _db.getFinancialSummary();
+  }
+
+  // ============================================================
+  // TRANSACTIONS
+  // ============================================================
+
+  Future<TransactionModel?> addTransaction({
+    required int amount,
+    required String note,
+    required String type,
+    required String category,
+    required PaymentMethod paymentMethod,
   }) async {
-    await DatabaseHelper.instance.insertMessage(aiSummary, true);
-    chatHistory.add({
-      'text': aiSummary,
-      'isAi': 1,
-      'queryResult': queryResult,
-      'vizType': vizType,
-      'originalQuestion': originalQuestion,
-    });
-    await _syncPendingCount();
+    final roomId = (isSharingConnected && _activeChatType == 'sharing') ? activeRoom?.id : null;
+    final tx = await _db.addTransaction(
+      amount: amount,
+      note: note,
+      type: type,
+      category: category,
+      paymentMethod: paymentMethod,
+      roomId: roomId,
+    );
+    await refreshAll();
+    return tx;
+  }
+
+  Future<bool> updateTransaction(
+    int id, {
+    int? amount,
+    String? note,
+    PaymentMethod? paymentMethod,
+  }) async {
+    final ok = await _db.updateTransaction(
+      id,
+      amount: amount,
+      note: note,
+      paymentMethod: paymentMethod,
+    );
+    if (ok) await refreshAll();
+    return ok;
+  }
+
+  Future<bool> deleteTransaction(int id) async {
+    final ok = await _db.deleteTransaction(id);
+    if (ok) await refreshAll();
+    return ok;
+  }
+
+  // ============================================================
+  // CHAT MESSAGES
+  // ============================================================
+
+  Future<void> addMessage(
+    String text,
+    bool isAi, {
+    Map<String, dynamic>? receiptData,
+    Map<String, dynamic>? queryResult,
+    String? vizType,
+  }) async {
+    debugPrint('FinanceProvider.addMessage: text=$text, isAi=$isAi, activeChatType=$_activeChatType');
+    
+    final roomId = (isSharingConnected && _activeChatType == 'sharing') ? activeRoom?.id : null;
+    final chatType = roomId != null ? null : _activeChatType;
+
+    await _db.addChatMessage(
+      text: text,
+      isAi: isAi,
+      receiptData: receiptData,
+      queryResult: queryResult,
+      vizType: vizType,
+      roomId: roomId,
+      chatType: chatType,
+    );
+
+    // Tambahkan ke local state langsung (tanpa reload penuh)
+    final msgMap = {
+      'text': text,
+      'is_ai': isAi,
+      'receipt_data': receiptData,
+      'query_result': queryResult,
+      'viz_type': vizType,
+      'created_at': DateTime.now().toIso8601String(),
+    };
+
+    if (roomId != null) {
+      sharedChatHistory.add(msgMap);
+    } else if (chatType == 'non_tunai') {
+      nonTunaiChatHistory.add(msgMap);
+    } else {
+      tunaiChatHistory.add(msgMap);
+    }
+
     notifyListeners();
-    _syncWithFirebase();
   }
 
-  Future<List<PendingRequest>> getAllPending() async {
-    return PendingRequestHelper.instance.getAllPending();
-  }
-
-  Future<void> completePending(int pendingId) async {
-    await PendingRequestHelper.instance.markDone(pendingId);
-    if (activeResolvingPending?.id == pendingId) activeResolvingPending = null;
-    if (pendingToFollowUp?.id == pendingId) pendingToFollowUp = null;
-    isWaitingDirectReply = false;
-    await _syncPendingCount();
-    notifyListeners();
-    _syncWithFirebase();
-  }
-
-  Future<void> cancelPending(int pendingId) async {
-    await PendingRequestHelper.instance.cancelPending(pendingId);
-    if (activeResolvingPending?.id == pendingId) activeResolvingPending = null;
-    if (pendingToFollowUp?.id == pendingId) pendingToFollowUp = null;
-    isWaitingDirectReply = false;
-    await _syncPendingCount();
-    notifyListeners();
-    _syncWithFirebase();
-  }
-
-  void setActiveResolvingPending(PendingRequest? pending) {
-    activeResolvingPending = pending;
+  void setAiThinking(bool value) {
+    isAiThinking = value;
     notifyListeners();
   }
 
-  void setWaitingDirectReply(bool value) {
-    isWaitingDirectReply = value;
-    notifyListeners();
+  // ============================================================
+  // PENDING REQUESTS
+  // ============================================================
+
+  Future<List<PendingModel>> getAllPending() async {
+    return await _db.getPendingRequests();
   }
 
-  void consumeDirectReply() {
-    isWaitingDirectReply = false;
-  }
-
-  void triggerFollowUp(PendingRequest pending) {
-    pendingToFollowUp = pending;
-    activeResolvingPending = pending;
-    notifyListeners();
-  }
-
-  void consumeFollowUp() {
-    pendingToFollowUp = null;
-  }
-
-  Future<void> savePendingRequestNew({
+  Future<PendingModel?> savePending({
     required String originalInput,
     String? nama,
     int? nominal,
@@ -322,10 +310,12 @@ class FinanceProvider extends ChangeNotifier {
     required String reason,
     String category = 'Other',
     String type = 'OUT',
+    PaymentMethod paymentMethod = PaymentMethod.tunai,
     List<String> missingFields = const [],
     Map<String, dynamic> partialData = const {},
   }) async {
-    await PendingRequestHelper.instance.savePending(
+    final pending = PendingModel(
+      userId: _db.currentUserId,
       originalInput: originalInput,
       nama: nama,
       nominal: nominal,
@@ -333,52 +323,165 @@ class FinanceProvider extends ChangeNotifier {
       aiQuestion: aiQuestion,
       reason: reason,
       category: category,
-      type: type,
+      type: TransactionTypeExt.fromString(type),
+      paymentMethod: paymentMethod,
       missingFields: missingFields,
       partialData: partialData,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
     );
-    await _syncPendingCount();
+    final saved = await _db.addPendingRequest(pending);
+    await _loadPendingCount();
     notifyListeners();
-    _syncWithFirebase();
+    return saved;
   }
 
-  Future<void> updatePendingState(
-    int id,
+  Future<bool> updatePending(
+    int id, {
     String? nama,
     int? nominal,
-    String missingFieldsJson,
-    String aiQuestion,
-  ) async {
-    final db = await DatabaseHelper.instance.database;
-    Map<String, dynamic> data = {
-      'missing_fields': missingFieldsJson,
-      'ai_question': aiQuestion,
-      'sync_status': 'pending_update',
-    };
-    if (nama != null && nama.isNotEmpty) data['nama'] = nama;
-    if (nominal != null && nominal > 0) data['nominal'] = nominal;
-
-    await db.update('pending_requests', data, where: 'id = ?', whereArgs: [id]);
-    await _syncPendingCount();
+    List<String>? missingFields,
+    String? aiQuestion,
+    String? status,
+  }) async {
+    final ok = await _db.updatePendingRequest(
+      id,
+      nama: nama,
+      nominal: nominal,
+      missingFields: missingFields,
+      aiQuestion: aiQuestion,
+      status: status,
+    );
+    await _loadPendingCount();
     notifyListeners();
-    _syncWithFirebase();
+    return ok;
   }
 
-  Future<RawQueryResult> executeQuery(String validatedSql) {
-    return DatabaseHelper.instance.rawSelect(validatedSql);
+  Future<bool> deletePending(int id) async {
+    final ok = await _db.deletePendingRequest(id);
+    await _loadPendingCount();
+    notifyListeners();
+    return ok;
   }
 
-  void setAiThinking(bool value) {
-    isAiThinking = value;
+  Future<bool> completePending(int id) async {
+    return deletePending(id);
+  }
+
+  Future<bool> cancelPending(int id) async {
+    return deletePending(id);
+  }
+
+  // ============================================================
+  // QUERY (AI Analytics)
+  // ============================================================
+
+  Future<List<Map<String, dynamic>>> executeQuery(String sql) async {
+    return await _db.rawQuery(sql);
+  }
+
+  QueryValidationResult validateQuery(String sql) {
+    return QueryValidator.validate(sql);
+  }
+
+  // ============================================================
+  // SHARING / ROOM
+  // ============================================================
+
+  Future<void> _loadSharingPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    isSharingEnabled = prefs.getBool('sharing_enabled') ?? false;
+    final savedRoomId = prefs.getString('active_room_id');
+    if (savedRoomId != null && isSharingEnabled) {
+      // akan di-load saat initialize
+    }
+  }
+
+  Future<void> setSharingEnabled(bool enabled) async {
+    isSharingEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('sharing_enabled', enabled);
+
+    if (!enabled) {
+      await leaveCurrentRoom();
+    }
     notifyListeners();
   }
 
-  Future<void> clearAll() async {
-    await DatabaseHelper.instance.clearAllData();
-    activeResolvingPending = null;
-    pendingToFollowUp = null;
-    isWaitingDirectReply = false;
-    await refreshData();
-    _syncWithFirebase();
+  Future<RoomModel?> joinRoom(String code) async {
+    final room = await _db.joinRoomByCode(code);
+    if (room != null) {
+      activeRoom = room;
+      isSharingConnected = true;
+      isSharingEnabled = true;
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('sharing_enabled', true);
+      await prefs.setString('active_room_id', room.id);
+
+      // Start realtime listener
+      _db.listenToSharedTransactions(
+        roomId: room.id,
+        onUpdate: () => refreshAll(),
+      );
+
+      await _loadSharedTransactions();
+      notifyListeners();
+    }
+    return room;
   }
+
+  Future<void> leaveCurrentRoom() async {
+    if (activeRoom != null) {
+      await _db.leaveRoom(activeRoom!.id);
+    }
+    activeRoom = null;
+    isSharingConnected = false;
+    sharedTransactions = [];
+    _db.stopListeningToShared();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('active_room_id');
+
+    notifyListeners();
+  }
+
+  // ============================================================
+  // DATA MANAGEMENT
+  // ============================================================
+
+  Future<void> wipeAllData() async {
+    final ok = await _db.wipePersonalData();
+    if (ok) {
+      allTransactions = [];
+      tunaiTransactions = [];
+      nonTunaiTransactions = [];
+      tunaiChatHistory = [];
+      nonTunaiChatHistory = [];
+      sharedChatHistory = [];
+      totalIn = 0;
+      totalOut = 0;
+      pendingCount = 0;
+      notifyListeners();
+    }
+  }
+
+  // === COMPATIBILITY METHODS FOR WIDGETS ===
+
+  void triggerFollowUp(PendingModel pending) {
+    // Inject follow-up question to chat
+    addMessage(pending.aiQuestion, true);
+  }
+
+  Future<bool> updateTransactionManual(int id, int amount, String note) async {
+    final ok = await updateTransaction(id, amount: amount, note: note);
+    return ok;
+  }
+
+  Future<bool> deleteTransactionManual(int id) async {
+    final ok = await deleteTransaction(id);
+    return ok;
+  }
+
+  List<TransactionModel> get history => allTransactions;
 }

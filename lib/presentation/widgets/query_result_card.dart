@@ -7,7 +7,32 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
-import '../../data/database/database_helper.dart';
+
+class RawQueryResult {
+  final List<String> columns;
+  final List<Map<String, dynamic>> rows;
+  final String? error;
+
+  RawQueryResult({
+    required this.columns,
+    required this.rows,
+    required this.error,
+  });
+
+  bool get isSuccess => error == null;
+  bool get isEmpty => rows.isEmpty;
+  int get rowCount => rows.length;
+
+  bool get isEffectivelyEmpty {
+    if (rows.isEmpty) return true;
+    for (final row in rows) {
+      for (final val in row.values) {
+        if (val != null && val != 0 && val != '0') return false;
+      }
+    }
+    return true;
+  }
+}
 
 // ==========================================
 // ENUM TIPE VISUALISASI
@@ -37,20 +62,27 @@ VizType vizTypeFromString(String s) {
 
 class QueryResultCard extends StatelessWidget {
   final String aiSummary; // Jawaban teks ringkas dari AI
-  final RawQueryResult result; // Data mentah dari SQLite
+  final Map<String, dynamic> queryResult; // Structured query result map {'rows': ..., 'columns': ...}
   final VizType vizType; // Hint visualisasi dari AI
-  final String originalQuestion;
 
   const QueryResultCard({
     super.key,
     required this.aiSummary,
-    required this.result,
+    required this.queryResult,
     required this.vizType,
-    required this.originalQuestion,
   });
+
+  RawQueryResult _toRawResult() {
+    final rowsList = queryResult['rows'] as List<dynamic>? ?? [];
+    final colsList = queryResult['columns'] as List<dynamic>? ?? [];
+    final rows = rowsList.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+    final columns = colsList.map((c) => c.toString()).toList();
+    return RawQueryResult(columns: columns, rows: rows, error: null);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final result = _toRawResult();
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 5),
       padding: const EdgeInsets.all(14),
@@ -91,7 +123,7 @@ class QueryResultCard extends StatelessWidget {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
-                onPressed: () => _showDetailModal(context),
+                onPressed: () => _showDetailModal(context, result),
                 icon: const Icon(Icons.table_chart, size: 16),
                 label: Text('Lihat Detail (${result.rowCount} baris)'),
                 style: TextButton.styleFrom(
@@ -113,21 +145,21 @@ class QueryResultCard extends StatelessWidget {
     );
   }
 
-  void _showDetailModal(BuildContext context) {
+  void _showDetailModal(BuildContext context, RawQueryResult result) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _DetailModal(
         result: result,
-        vizType: _resolveVizType(),
-        title: originalQuestion,
+        vizType: _resolveVizType(result),
+        title: "Detail Analisis",
       ),
     );
   }
 
   /// Tentukan tipe visualisasi final (resolve 'auto')
-  VizType _resolveVizType() {
+  VizType _resolveVizType(RawQueryResult result) {
     if (vizType != VizType.auto) return vizType;
 
     // Auto-detect: jika ada kolom angka dan <= 8 baris → pie/bar
@@ -138,6 +170,7 @@ class QueryResultCard extends StatelessWidget {
           c.toLowerCase().contains('tanggal'),
     );
     final numericCols = result.columns.where((c) {
+      if (result.rows.isEmpty) return false;
       final sample = result.rows.first[c];
       return sample is int || sample is double;
     }).length;

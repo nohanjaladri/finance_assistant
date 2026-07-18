@@ -1,384 +1,118 @@
+/// home_screen.dart (v2)
+/// Dashboard utama dengan tab Tunai / Non Tunai / Sharing (kondisional)
+library;
+
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'settings_profile_screens.dart'; // IMPORT LAYAR BARU
-import '../../core/utils/amount_parser.dart';
-import '../../core/utils/query_validator.dart';
-import '../../data/database/database_helper.dart';
-import '../../data/database/pending_request_helper.dart';
-import '../../data/services/ai_service.dart';
+
+import '../../data/models/transaction_model.dart';
+import '../../data/services/supabase_service.dart';
 import '../../data/services/voice_service.dart';
-import '../../data/services/auth_service.dart'; // UNTUK FUNGSI LOGOUT
 import '../providers/finance_provider.dart';
+import '../controllers/ai_chat_controller.dart';
 import '../widgets/query_result_card.dart';
-import '../widgets/pending_reminder_card.dart';
 import '../widgets/receipt_card.dart';
+import 'auth_screens.dart';
+import 'settings_profile_screens.dart';
 import 'transaction_history_screen.dart';
-import 'auth_screens.dart'; // UNTUK KEMBALI KE LOGIN
+import '../../core/utils/amount_parser.dart';
 
-// ==========================================
-// WIDGET SKELETON (UNTUK EFEK SHIMMER LOADING)
-// ==========================================
-class Skeleton extends StatefulWidget {
-  final double? width, height;
-  final BorderRadius? borderRadius;
-  const Skeleton({super.key, this.width, this.height, this.borderRadius});
-  @override
-  State<Skeleton> createState() => _SkeletonState();
-}
-
-class _SkeletonState extends State<Skeleton>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    )..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: Tween<double>(begin: 0.4, end: 1.0).animate(_controller),
-      child: Container(
-        width: widget.width,
-        height: widget.height,
-        decoration: BoxDecoration(
-          color: Colors.grey.shade300,
-          borderRadius: widget.borderRadius ?? BorderRadius.circular(8),
-        ),
-      ),
-    );
-  }
-}
-
-// ==========================================
-// WIDGET CLOUD SYNC ANIMATED INDICATOR
-// ==========================================
-class CloudSyncIndicator extends StatelessWidget {
-  final SyncStatus status;
-  const CloudSyncIndicator({super.key, required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 400),
-      transitionBuilder: (Widget child, Animation<double> animation) {
-        return ScaleTransition(
-          scale: animation,
-          child: FadeTransition(opacity: animation, child: child),
-        );
-      },
-      child: _buildIndicator(),
-    );
-  }
-
-  Widget _buildIndicator() {
-    switch (status) {
-      case SyncStatus.syncing:
-        return Container(
-          key: const ValueKey("syncing"),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.blue,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                "Menyinkronkan",
-                style: TextStyle(
-                  color: Colors.blue.shade700,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        );
-      case SyncStatus.offline:
-        return Container(
-          key: const ValueKey("offline"),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.red.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.cloud_off_rounded,
-                color: Colors.redAccent,
-                size: 16,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                "Offline",
-                style: TextStyle(
-                  color: Colors.red.shade700,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        );
-      case SyncStatus.synced:
-      default:
-        return Container(
-          key: const ValueKey("synced"),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.green.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.cloud_done_rounded,
-                color: Colors.green,
-                size: 16,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                "Tersimpan",
-                style: TextStyle(
-                  color: Colors.green.shade700,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        );
-    }
-  }
-}
-
-// ==========================================
-// BUBBLE BERPIKIR AI
-// ==========================================
-class AnimatedThinkingBubble extends StatefulWidget {
-  final Color primaryColor;
-  const AnimatedThinkingBubble({super.key, required this.primaryColor});
-  @override
-  State<AnimatedThinkingBubble> createState() => _AnimatedThinkingBubbleState();
-}
-
-class _AnimatedThinkingBubbleState extends State<AnimatedThinkingBubble> {
-  int _dotCount = 0;
-  late Timer _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(const Duration(milliseconds: 400), (timer) {
-      if (mounted) setState(() => _dotCount = (_dotCount + 1) % 4);
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    String dots = List.filled(_dotCount, '.').join(' ');
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12, top: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade100,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(20),
-            topRight: Radius.circular(20),
-            bottomRight: Radius.circular(20),
-            bottomLeft: Radius.circular(5),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                color: widget.primaryColor,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              "Sedang berpikir $dots",
-              style: TextStyle(
-                color: Colors.grey.shade600,
-                fontStyle: FontStyle.italic,
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
+// ============================================================
+// HOME SCREEN — TabController master
+// ============================================================
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  bool isChatExpanded = false;
-  final TextEditingController _textController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  DateTime? _lastPressedAt;
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+  // Tabs
+  late TabController _tabController;
+  int _prevTabCount = 2;
 
-  bool _showChartAnim = false;
-  bool _isLoading = false;
-  int _refreshKey = 0;
+  // Chat
+  bool _isChatExpanded = false;
+  final TextEditingController _textController = TextEditingController();
+  final ScrollController _chatScrollController = ScrollController();
   bool _showScrollToBottom = false;
+  DateTime? _lastBackPressed;
+
+  // Scaffold drawer key
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_onTabChanged);
+    _chatScrollController.addListener(_onChatScroll);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<FinanceProvider>().addListener(_onFinanceChanged);
-    });
-
-    _scrollController.addListener(_scrollListener);
-
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) setState(() => _showChartAnim = true);
+      context.read<FinanceProvider>().addListener(_onProviderChanged);
+      _updateActiveChatType();
     });
   }
 
-  void _scrollListener() {
-    if (_scrollController.hasClients) {
-      final maxScroll = _scrollController.position.maxScrollExtent;
-      final currentScroll = _scrollController.offset;
-      final show = (maxScroll - currentScroll) > 150;
+  void _onTabChanged() {
+    _updateActiveChatType();
+  }
+
+  void _updateActiveChatType() {
+    if (!mounted) return;
+    final finance = context.read<FinanceProvider>();
+    String type;
+    if (_tabController.index == 0) {
+      type = 'tunai';
+    } else if (_tabController.index == 1) {
+      type = 'non_tunai';
+    } else {
+      type = 'sharing';
+    }
+    finance.setActiveChatType(type);
+  }
+
+  void _onProviderChanged() {
+    if (!mounted) return;
+    final finance = context.read<FinanceProvider>();
+    final newCount = finance.isSharingConnected ? 3 : 2;
+    if (newCount != _prevTabCount) {
+      _prevTabCount = newCount;
+      final currentIndex = _tabController.index;
+      _tabController.removeListener(_onTabChanged);
+      _tabController.dispose();
+      _tabController = TabController(
+        length: newCount,
+        vsync: this,
+        initialIndex: currentIndex.clamp(0, newCount - 1),
+      );
+      _tabController.addListener(_onTabChanged);
+      _updateActiveChatType();
+      setState(() {});
+    }
+  }
+
+  void _onChatScroll() {
+    if (_chatScrollController.hasClients) {
+      final max = _chatScrollController.position.maxScrollExtent;
+      final cur = _chatScrollController.offset;
+      final show = (max - cur) > 150;
       if (_showScrollToBottom != show) {
         setState(() => _showScrollToBottom = show);
       }
     }
   }
 
-  Future<void> _handleRefresh() async {
-    setState(() {
-      _isLoading = true;
-      _showChartAnim = false;
-    });
-
-    await context.read<FinanceProvider>().refreshData();
-
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-        _refreshKey++;
-      });
-      Future.delayed(const Duration(milliseconds: 50), () {
-        if (mounted) setState(() => _showChartAnim = true);
-      });
-    }
-  }
-
-  void _toggleChat(bool open) {
-    setState(() => isChatExpanded = open);
-    if (open) {
-      _scrollToBottom();
-    } else {
-      _handleRefresh();
-    }
-  }
-
-  void _showErrorSnackBar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          message,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        backgroundColor: Colors.redAccent,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(20),
-      ),
-    );
-  }
-
-  void _onFinanceChanged() {
-    final finance = context.read<FinanceProvider>();
-    final pending = finance.pendingToFollowUp;
-    if (pending != null) {
-      finance.consumeFollowUp();
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _injectFollowUpBubble(pending),
-      );
-    }
-  }
-
-  void _injectFollowUpBubble(PendingRequest pending) {
-    if (!mounted) return;
-    if (!isChatExpanded) _toggleChat(true);
-    final finance = context.read<FinanceProvider>();
-    finance.setWaitingDirectReply(true);
-    finance.addMessage(pending.aiQuestion, true);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
-  }
-
-  @override
-  void dispose() {
-    context.read<FinanceProvider>().removeListener(_onFinanceChanged);
-    _scrollController.removeListener(_scrollListener);
-    _scrollController.dispose();
-    _textController.dispose();
-    super.dispose();
-  }
-
-  String _getApiKey() => dotenv.maybeGet('GROQ_API_KEY') ?? "";
-
-  void _scrollToBottom() {
+  void _scrollChatToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
+      if (_chatScrollController.hasClients) {
+        _chatScrollController.animateTo(
+          _chatScrollController.position.maxScrollExtent,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOutQuart,
         );
@@ -386,439 +120,811 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<String> _buildPendingContext(FinanceProvider finance) async {
-    final pendings = await finance.getAllPending();
-    if (pendings.isEmpty) return "";
-
-    StringBuffer sb = StringBuffer();
-    sb.writeln("=== DAFTAR TRANSAKSI TERTUNDA (PENDING) ===");
-    for (var p in pendings) {
-      final nama = p.nama ?? 'Belum ada';
-      final nominal = p.nominal != null ? "Rp ${p.nominal}" : "Belum ada";
-      sb.writeln(
-        "[ID: ${p.id}] Barang: $nama | Harga: $nominal | Field Kurang: ${p.missingFields} | Pertanyaan Aktif: '${p.aiQuestion}'",
-      );
-    }
-    sb.writeln("===========================================");
-    return sb.toString();
+  void _toggleChat(bool open) {
+    setState(() => _isChatExpanded = open);
+    if (open) _scrollChatToBottom();
   }
 
-  Future<void> _processMessage(String userText) async {
-    if (userText.trim().isEmpty) return;
+  @override
+  void dispose() {
+    context.read<FinanceProvider>().removeListener(_onProviderChanged);
+    _tabController.removeListener(_onTabChanged);
+    _tabController.dispose();
+    _textController.dispose();
+    _chatScrollController.dispose();
+    super.dispose();
+  }
 
-    final apiKey = _getApiKey();
-    if (apiKey.isEmpty) {
-      _showErrorSnackBar("API Key Groq tidak ditemukan di file .env");
-      return;
-    }
+  // ============================================================
+  // SEND MESSAGE
+  // ============================================================
+  Future<void> _sendMessage() async {
+    final text = _textController.text.trim();
+    if (text.isEmpty) return;
+    _textController.clear();
 
     final finance = context.read<FinanceProvider>();
     final voice = context.read<VoiceService>();
-    final aiService = AiService(apiKey: apiKey);
 
-    final userAmountFallback = AmountParser.parseAmount(userText);
-    bool userHasDigits =
-        RegExp(r'\d').hasMatch(userText) || userAmountFallback != null;
+    final controller = AiChatController(
+      financeProvider: finance,
+      voiceService: voice,
+    );
 
-    voice.stop();
-    finance.consumeDirectReply();
-
-    try {
-      await finance.addMessage(userText, false);
-    } catch (e) {
-      _showErrorSnackBar("Gagal menyimpan pesan.");
-      return;
-    }
-
-    finance.setAiThinking(true);
-    _scrollToBottom();
-
-    try {
-      final pendingContext = await _buildPendingContext(finance);
-      final systemPrompt = aiService.buildSystemPrompt(pendingContext);
-
-      final messages = [
-        {"role": "system", "content": systemPrompt},
-        ...finance.chatHistory
-            .where((m) => m['queryResult'] == null && m['receiptData'] == null)
-            .takeLast(8)
-            .map(
-              (m) => {
-                "role": m['isAi'] == 1 ? "assistant" : "user",
-                "content": m['text'] as String? ?? "",
-              },
-            ),
-        {"role": "user", "content": userText},
-      ];
-
-      final agentResponse = await aiService.sendAgentMessage(messages);
-      final choice = agentResponse.data['choices'][0];
-      final message = choice['message'];
-      final toolCalls = message['tool_calls'] as List<dynamic>?;
-
-      if (toolCalls != null && toolCalls.isNotEmpty) {
-        await _executeToolCalls(
-          toolCalls: toolCalls,
-          agentMessage: message,
-          userText: userText,
-          aiService: aiService,
-          finance: finance,
-          voice: voice,
-          pendingContext: pendingContext,
-          userHasDigits: userHasDigits,
-        );
-      } else {
-        String content = message['content'] as String? ?? "";
-
-        bool aiHasPrice = RegExp(
-          r'(Rp\s*\.?\s*\d+|\d{3,})',
-          caseSensitive: false,
-        ).hasMatch(content);
-        if (aiHasPrice && !userHasDigits) {
-          String extractedNote = userText
-              .replaceAll(
-                RegExp(
-                  r'\d+(?:[.,]\d+)?\s*(?:juta|jt|ribu|rb|k\b)?|rp\s*',
-                  caseSensitive: false,
-                ),
-                '',
-              )
-              .trim();
-          if (extractedNote.isEmpty) extractedNote = "Item tersebut";
-
-          await finance.savePendingRequestNew(
-            originalInput: userText,
-            nama: extractedNote,
-            nominal: null,
-            aiQuestion: "Mohon lengkapi nominal untuk '$extractedNote'.",
-            reason: "Penghancur Halusinasi Teks AI",
-            type: 'OUT',
-            missingFields: ['amount'],
-            partialData: {'note': extractedNote},
-          );
-          content = "Mohon lengkapi nominal untuk '$extractedNote'.";
-        }
-        await finance.addMessage(content, true);
-        if (isChatExpanded) voice.speak(content);
-      }
-    } catch (e) {
-      await finance.addMessage(
-        "Maaf, gagal memproses data karena gangguan koneksi.",
-        true,
-      );
-    } finally {
-      finance.setAiThinking(false);
-      _scrollToBottom();
-    }
+    await controller.processMessage(
+      userText: text,
+      isChatVisible: _isChatExpanded,
+    );
+    _scrollChatToBottom();
   }
 
-  Future<void> _executeToolCalls({
-    required List<dynamic> toolCalls,
-    required Map<String, dynamic> agentMessage,
-    required String userText,
-    required AiService aiService,
-    required FinanceProvider finance,
-    required VoiceService voice,
-    required String pendingContext,
-    required bool userHasDigits,
-  }) async {
-    final toolResults = <Map<String, dynamic>>[];
-    List<Map<String, dynamic>> recordedTxs = [];
-    bool intercepted = false;
-    List<String> interactiveQuestions = [];
-    Set<String> processedSignatures = {};
+  // ============================================================
+  // BUILD
+  // ============================================================
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    final tabCount = finance.isSharingConnected ? 3 : 2;
 
-    for (final call in toolCalls) {
-      String toolName = call['function']['name'] as String;
-      final toolCallId = call['id'] as String;
-      Map<String, dynamic> args = {};
-      try {
-        final raw = call['function']['arguments'];
-        args =
-            jsonDecode(raw is String ? raw : jsonEncode(raw))
-                as Map<String, dynamic>;
-      } catch (_) {}
-
-      if (toolName == "record_transaction") {
-        int checkAmount = 0;
-        if (args['amount'] != null)
-          checkAmount =
-              int.tryParse(
-                AmountParser.cleanNumberString(args['amount'].toString()),
-              ) ??
-              0;
-        if (!userHasDigits && checkAmount > 0) {
-          intercepted = true;
-          toolName = "create_pending_state";
-          args['partial_note'] = args['note'];
-          args['missing_fields'] = ['amount'];
-          args['amount'] = null;
-          args['ai_generated_question'] =
-              "Berapa nominal untuk ${args['note']}?";
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_isChatExpanded) {
+          _toggleChat(false);
+          return;
         }
-      }
-
-      String result = "";
-
-      if (toolName == "record_transaction") {
-        int finalAmount = 0;
-        if (args['amount'] != null)
-          finalAmount =
-              int.tryParse(
-                AmountParser.cleanNumberString(args['amount'].toString()),
-              ) ??
-              0;
-        final note = args['note'] as String? ?? "Transaksi";
-
-        if (finalAmount > 0) {
-          String sig = "${note.toLowerCase()}_$finalAmount";
-          if (!processedSignatures.contains(sig)) {
-            processedSignatures.add(sig);
-            final type = (args['type'] as String? ?? 'OUT').toUpperCase();
-            final category = args['category'] as String? ?? 'Other';
-            try {
-              await finance.addTransaction(finalAmount, note, type, category);
-              result = "success";
-              recordedTxs.add({
-                'note': note,
-                'amount': finalAmount,
-                'type': type,
-              });
-
-              if (mounted) setState(() => _showChartAnim = false);
-              Future.delayed(const Duration(milliseconds: 50), () {
-                if (mounted) setState(() => _showChartAnim = true);
-              });
-            } catch (_) {}
-          } else {
-            result = "skipped_duplicate";
-          }
+        final now = DateTime.now();
+        if (_lastBackPressed == null ||
+            now.difference(_lastBackPressed!) > const Duration(seconds: 2)) {
+          _lastBackPressed = now;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text("Tekan lagi untuk keluar"),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              margin: const EdgeInsets.all(20),
+            ),
+          );
+        } else {
+          SystemNavigator.pop();
         }
-      } else if (toolName == "create_pending_state") {
-        final partialNote = args['partial_note'] as String? ?? "";
-        final aiQuestion =
-            args['ai_generated_question'] as String? ?? "Mohon lengkapi data.";
-        int? aiAmount;
-        if (args['partial_amount'] != null)
-          aiAmount = int.tryParse(
-            AmountParser.cleanNumberString(args['partial_amount'].toString()),
-          );
-        final missing =
-            (args['missing_fields'] as List?)
-                ?.map((e) => e.toString())
-                .toList() ??
-            <String>[];
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: const Color(0xFFF4F6FC),
+        drawer: _buildDrawer(finance),
+        body: Stack(
+          children: [
+            Column(
+              children: [
+                _buildAppBar(finance, tabCount),
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: finance.refreshAll,
+                    child: TabBarView(
+                      controller: _tabController,
+                      children: [
+                        _TunaiTab(finance: finance),
+                        _NonTunaiTab(finance: finance),
+                        if (tabCount == 3) _SharingTab(finance: finance),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            // AI Chat panel overlay
+            _buildChatPanel(finance),
+          ],
+        ),
+      ),
+    );
+  }
 
-        try {
-          await finance.savePendingRequestNew(
-            originalInput: userText,
-            nama: partialNote.isEmpty ? null : partialNote,
-            nominal: aiAmount,
-            aiQuestion: aiQuestion,
-            reason: "Data belum lengkap",
-            type: 'OUT',
-            missingFields: missing,
-            partialData: {'note': partialNote},
-          );
-          interactiveQuestions.add(aiQuestion);
-          result = "pending_created";
-        } catch (_) {}
-      } else if (toolName == "update_pending_state") {
-        int pId = int.tryParse(args['pending_id'].toString()) ?? -1;
-        List<String> missing =
-            (args['remaining_missing_fields'] as List?)
-                ?.map((e) => e.toString())
-                .toList() ??
-            <String>[];
-        String nextQuestion = args['next_ai_question'] as String? ?? "";
+  // ============================================================
+  // APP BAR with tabs
+  // ============================================================
+  Widget _buildAppBar(FinanceProvider finance, int tabCount) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            // Top bar
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.menu_rounded, color: Colors.white),
+                    onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                  ),
+                  const Expanded(
+                    child: Text(
+                      "Dompetku AI",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ),
+                  // Sync indicator
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (finance.syncStatus == SyncStatus.syncing)
+                          const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: Colors.white,
+                            ),
+                          )
+                        else
+                          Icon(
+                            finance.syncStatus == SyncStatus.error
+                                ? Icons.cloud_off_rounded
+                                : Icons.cloud_done_rounded,
+                            size: 12,
+                            color: Colors.white,
+                          ),
+                        const SizedBox(width: 4),
+                        Text(
+                          finance.syncStatus == SyncStatus.syncing
+                              ? "Sync..."
+                              : finance.syncStatus == SyncStatus.error
+                              ? "Offline"
+                              : "Tersimpan",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Chat button
+                  Stack(
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          _isChatExpanded
+                              ? Icons.chat_bubble_rounded
+                              : Icons.chat_bubble_outline_rounded,
+                          color: Colors.white,
+                        ),
+                        onPressed: () => _toggleChat(!_isChatExpanded),
+                      ),
+                      if (finance.pendingCount > 0)
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Container(
+                            width: 16,
+                            height: 16,
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: Text(
+                                finance.pendingCount.toString(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            // Tab bar
+            TabBar(
+              controller: _tabController,
+              indicatorColor: Colors.white,
+              indicatorWeight: 3,
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white60,
+              labelStyle: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+              unselectedLabelStyle: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+              tabs: [
+                const Tab(
+                  icon: Icon(Icons.payments_rounded, size: 18),
+                  text: "Tunai",
+                  iconMargin: EdgeInsets.only(bottom: 2),
+                ),
+                const Tab(
+                  icon: Icon(Icons.credit_card_rounded, size: 18),
+                  text: "Non Tunai",
+                  iconMargin: EdgeInsets.only(bottom: 2),
+                ),
+                if (tabCount == 3)
+                  const Tab(
+                    icon: Icon(Icons.group_rounded, size: 18),
+                    text: "Sharing",
+                    iconMargin: EdgeInsets.only(bottom: 2),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-        int? updatedAmount;
-        if (args['updated_amount'] != null)
-          updatedAmount = int.tryParse(
-            AmountParser.cleanNumberString(args['updated_amount'].toString()),
-          );
-        String updatedNote = args['updated_note'] as String? ?? "Transaksi";
+  // ============================================================
+  // DRAWER (Hamburger Menu)
+  // ============================================================
+  Widget _buildDrawer(FinanceProvider finance) {
+    final user = SupabaseService.instance.currentUser;
+    final email = user?.email ?? "pengguna@email.com";
 
-        if (pId != -1) {
-          if (missing.isEmpty && updatedAmount != null && updatedAmount > 0) {
-            String sig = "${updatedNote.toLowerCase()}_$updatedAmount";
-            try {
-              if (!processedSignatures.contains(sig)) {
-                processedSignatures.add(sig);
-                await finance.addTransaction(
-                  updatedAmount,
-                  updatedNote,
-                  "OUT",
-                  "Other",
+    return Drawer(
+      backgroundColor: Colors.white,
+      child: Column(
+        children: [
+          UserAccountsDrawerHeader(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
+              ),
+            ),
+            accountName: const Text(
+              "Dompetku AI",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            accountEmail: Text(email),
+            currentAccountPicture: CircleAvatar(
+              backgroundColor: Colors.white,
+              child: Text(
+                email.isNotEmpty ? email[0].toUpperCase() : "D",
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF5E5CE6),
+                ),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.person_outline_rounded),
+            title: const Text("Profil Saya"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.history_rounded),
+            title: const Text("Riwayat Transaksi"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const TransactionHistoryScreen(),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.settings_outlined),
+            title: const Text("Pengaturan"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+          ),
+          const Divider(height: 1),
+          // SHARING — Di dalam Pengaturan (bisa juga taruh langsung di drawer)
+          ListTile(
+            leading: Icon(
+              Icons.group_rounded,
+              color: finance.isSharingConnected
+                  ? const Color(0xFF009688)
+                  : Colors.grey,
+            ),
+            title: const Text("Dompet Bersama"),
+            subtitle: Text(
+              finance.isSharingConnected
+                  ? "Terhubung: ${finance.activeRoom?.name ?? 'Room'}"
+                  : "Belum terhubung",
+              style: TextStyle(
+                fontSize: 12,
+                color: finance.isSharingConnected
+                    ? const Color(0xFF009688)
+                    : Colors.grey,
+              ),
+            ),
+            trailing: finance.isSharingConnected
+                ? Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF009688),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      "AKTIF",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  )
+                : null,
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              );
+            },
+          ),
+          const Spacer(),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.logout_rounded, color: Colors.redAccent),
+            title: const Text(
+              "Keluar",
+              style: TextStyle(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            onTap: () async {
+              Navigator.pop(context);
+              await SupabaseService.instance.signOut();
+              if (mounted) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
                 );
-                recordedTxs.add({
-                  'note': updatedNote,
-                  'amount': updatedAmount,
-                  'type': "OUT",
-                });
-
-                if (mounted) setState(() => _showChartAnim = false);
-                Future.delayed(const Duration(milliseconds: 50), () {
-                  if (mounted) setState(() => _showChartAnim = true);
-                });
               }
-              await finance.completePending(pId);
-              result = "resolved";
-            } catch (_) {}
-          } else {
-            try {
-              await finance.updatePendingState(
-                pId,
-                updatedNote,
-                updatedAmount,
-                jsonEncode(missing),
-                nextQuestion,
-              );
-              if (nextQuestion.isNotEmpty)
-                interactiveQuestions.add(nextQuestion);
-              result = "updated_still_pending";
-            } catch (_) {}
-          }
-        }
-      } else if (toolName == "cancel_pending_state") {
-        int pId = int.tryParse(args['pending_id'].toString()) ?? -1;
-        if (pId != -1) {
-          await finance.cancelPending(pId);
-          result = "cancelled";
-        }
-      } else if (toolName == "update_transaction") {
-        final id = int.tryParse(args['id'].toString()) ?? -1;
-        int newAmount =
-            int.tryParse(
-              AmountParser.cleanNumberString(args['new_amount'].toString()),
-            ) ??
-            0;
-        final newNote = args['new_note'] as String?;
-        if (id != -1 && newAmount > 0) {
-          await DatabaseHelper.instance.updateTransaction(
-            id,
-            newAmount,
-            newNote,
-          );
-          await finance.refreshData();
-          result = "success";
-        }
-      } else if (toolName == "query_database") {
-        result = "query_pending";
-      } else if (toolName == "ask_clarification") {
-        result = "clarification_sent";
-      }
-
-      toolResults.add({
-        "tool_call_id": toolCallId,
-        "tool_name": toolName,
-        "result": result,
-        "args": args,
-      });
-    }
-
-    final queryTool = toolResults
-        .where((r) => r['result'] == 'query_pending')
-        .firstOrNull;
-    if (queryTool != null) {
-      final args = queryTool['args'] as Map<String, dynamic>;
-      final sql = args['sql'] as String? ?? '';
-      if (sql.isNotEmpty) {
-        final validation = QueryValidator.validate(sql);
-        if (validation.isValid) {
-          final queryResult = await finance.executeQuery(
-            validation.sanitizedQuery!,
-          );
-          final resultContent = queryResult.isEffectivelyEmpty
-              ? "Tidak ada data ditemukan"
-              : "Ditemukan ${queryResult.rowCount} baris:\n${queryResult.rows.take(10).map((r) => r.toString()).join('\n')}";
-          final sysPrompt = aiService.buildSystemPrompt(pendingContext);
-          final aiSummary = await aiService.summarizeQuery(
-            sysPrompt,
-            userText,
-            agentMessage,
-            queryTool['tool_call_id'] as String,
-            resultContent,
-          );
-
-          final isSimpleAggregate =
-              (queryResult.rows.length == 1 && queryResult.columns.length <= 2);
-          if (queryResult.isEffectivelyEmpty || isSimpleAggregate) {
-            await finance.addMessage(aiSummary, true);
-          } else {
-            VizType parsedVizType = VizType.auto;
-            try {
-              parsedVizType = VizType.values.firstWhere(
-                (e) =>
-                    e.toString().split('.').last ==
-                    (args['viz_type']?.toString() ?? 'auto'),
-                orElse: () => VizType.auto,
-              );
-            } catch (_) {}
-            await finance.addQueryResultMessage(
-              aiSummary: aiSummary,
-              queryResult: queryResult,
-              vizType: parsedVizType.toString().split('.').last,
-              originalQuestion: userText,
-            );
-          }
-          if (isChatExpanded) voice.speak(aiSummary);
-        }
-      }
-      return;
-    }
-
-    final hasUpdate = toolResults.any(
-      (r) => r['tool_name'] == 'update_transaction',
+            },
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
     );
-    final hasCancel = toolResults.any(
-      (r) => r['tool_name'] == 'cancel_pending_state',
-    );
+  }
 
-    if (hasUpdate) {
-      await finance.addMessage("Data transaksi berhasil diperbarui! ✓", true);
-      if (isChatExpanded) voice.speak("Data diperbarui");
+  // ============================================================
+  // AI CHAT PANEL (Overlay)
+  // ============================================================
+  Widget _buildChatPanel(FinanceProvider finance) {
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeInOutCubic,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      top: _isChatExpanded ? 0 : null,
+      child: Container(
+        height: _isChatExpanded ? null : 0,
+        decoration: const BoxDecoration(
+          color: Color(0xFFF4F6FC),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          boxShadow: [
+            BoxShadow(
+              color: Color(0x20000000),
+              blurRadius: 20,
+              offset: Offset(0, -4),
+            ),
+          ],
+        ),
+        child: _isChatExpanded
+            ? SafeArea(
+                top: false,
+                child: Column(
+                  children: [
+                    // Chat handle bar
+                    GestureDetector(
+                      onTap: () => _toggleChat(false),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Column(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade300,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(
+                                  Icons.chat_bubble_rounded,
+                                  color: Color(0xFF5E5CE6),
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 6),
+                                const Text(
+                                  "Asisten AI",
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1E1E2C),
+                                  ),
+                                ),
+                                if (finance.isAiThinking) ...[
+                                  const SizedBox(width: 8),
+                                  const _ThinkingDots(),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    // Messages
+                    Expanded(
+                      child: ListView.builder(
+                        controller: _chatScrollController,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        itemCount:
+                            finance.chatHistory.length +
+                            (finance.isAiThinking ? 1 : 0),
+                        itemBuilder: (_, i) {
+                          if (i == finance.chatHistory.length) {
+                            return const _ThinkingBubble();
+                          }
+                          return _buildMessageBubble(finance.chatHistory[i]);
+                        },
+                      ),
+                    ),
+                    // Input area
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, -2),
+                          ),
+                        ],
+                      ),
+                      padding: EdgeInsets.only(
+                        left: 16,
+                        right: 16,
+                        top: 12,
+                        bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+                      ),
+                      child: Row(
+                        children: [
+                          // Voice button
+                          _buildVoiceButton(),
+                          const SizedBox(width: 8),
+                          // Text input
+                          Expanded(
+                            child: TextField(
+                              controller: _textController,
+                              onSubmitted: (_) => _sendMessage(),
+                              textInputAction: TextInputAction.send,
+                              decoration: InputDecoration(
+                                hintText: "Ketik atau ucapkan transaksi...",
+                                hintStyle: TextStyle(
+                                  color: Colors.grey.shade400,
+                                  fontSize: 14,
+                                ),
+                                filled: true,
+                                fillColor: const Color(0xFFF4F6FC),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(24),
+                                  borderSide: BorderSide.none,
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // Send button
+                          GestureDetector(
+                            onTap: _sendMessage,
+                            child: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: const BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xFF5E5CE6),
+                                    Color(0xFF8C52FF),
+                                  ],
+                                ),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.send_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            : const SizedBox.shrink(),
+      ),
+    );
+  }
+
+  Widget _buildVoiceButton() {
+    final voice = context.watch<VoiceService>();
+    return GestureDetector(
+      onTap: () async {
+        if (voice.isListening) {
+          await voice.stopListening();
+        } else {
+          await voice.startListening(
+            onResult: (text, isFinal) {
+              _textController.text = text;
+              if (isFinal) {
+                _sendMessage();
+              }
+            },
+          );
+        }
+      },
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: voice.isListening ? Colors.red.shade100 : Colors.grey.shade100,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          voice.isListening ? Icons.mic_off_rounded : Icons.mic_rounded,
+          color: voice.isListening ? Colors.red : Colors.grey.shade600,
+          size: 22,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageBubble(Map<String, dynamic> msg) {
+    final isAi = msg['is_ai'] as bool? ?? (msg['isAi'] == 1);
+    final text = msg['text'] as String? ?? '';
+    final receiptData = msg['receipt_data'];
+    final queryResult = msg['query_result'];
+    final vizType = msg['viz_type'] as String? ?? 'auto';
+
+    if (text == 'RECEIPT_DATA' && receiptData != null) {
+      Map<String, dynamic> data = {};
+      if (receiptData is String) {
+        try {
+          data = jsonDecode(receiptData);
+        } catch (_) {}
+      } else if (receiptData is Map) {
+        data = Map<String, dynamic>.from(receiptData);
+      }
+      return ReceiptCard(receiptData: data);
     }
 
-    if (hasCancel) {
-      await finance.addMessage(
-        "Transaksi yang tertunda telah dibatalkan. ✓",
-        true,
+    if (queryResult != null) {
+      return QueryResultCard(
+        aiSummary: text,
+        queryResult: queryResult is Map
+            ? Map<String, dynamic>.from(queryResult)
+            : {},
+        vizType: vizTypeFromString(vizType),
       );
-      if (isChatExpanded) voice.speak("Dibatalkan.");
     }
 
-    if (recordedTxs.isNotEmpty) {
-      await finance.addMessage("Transaksi Selesai & Dicatat ✓", true);
-      String jsonStr = jsonEncode(recordedTxs);
-      await finance.addMessage("RECEIPT_DATA", true, receiptData: jsonStr);
-    }
+    return Align(
+      alignment: isAi ? Alignment.centerLeft : Alignment.centerRight,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isAi ? Colors.white : const Color(0xFF5E5CE6),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: isAi
+                ? const Radius.circular(4)
+                : const Radius.circular(18),
+            bottomRight: isAi
+                ? const Radius.circular(18)
+                : const Radius.circular(4),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: isAi ? const Color(0xFF1E1E2C) : Colors.white,
+            fontSize: 14,
+            height: 1.4,
+          ),
+        ),
+      ),
+    );
+  }
+}
 
-    final clarifyTool = toolResults
-        .where((r) => r['tool_name'] == 'ask_clarification')
-        .firstOrNull;
-    final remainingPendings = await finance.getAllPending();
+// ============================================================
+// TUNAI TAB
+// ============================================================
+class _TunaiTab extends StatelessWidget {
+  final FinanceProvider finance;
+  const _TunaiTab({required this.finance});
 
-    if (clarifyTool != null) {
-      final q =
-          clarifyTool['args']['question'] as String? ??
-          "Bisa diperjelas lagi maksudnya?";
-      await finance.addMessage(q, true);
-      if (isChatExpanded) voice.speak(q);
-    } else if (interactiveQuestions.isNotEmpty) {
-      await finance.addMessage(interactiveQuestions.join("\n"), true);
-      if (isChatExpanded && recordedTxs.isEmpty)
-        voice.speak("Mohon lengkapi datanya.");
-    } else if (intercepted) {
-      await finance.addMessage("Berapa nominal/harganya?", true);
-    } else if (remainingPendings.isNotEmpty) {
-      String nextQ = remainingPendings.first.aiQuestion;
-      await finance.addMessage("Masih ada yang tertunda:\n$nextQ", true);
-      if (isChatExpanded) voice.speak("Masih ada transaksi tertunda.");
-    } else if (recordedTxs.isNotEmpty) {
-      if (isChatExpanded) voice.speak("Semua transaksi berhasil dicatat");
-    } else if (!hasUpdate && !hasCancel) {
-      await finance.addMessage("Proses Selesai! ✓", true);
+  @override
+  Widget build(BuildContext context) {
+    return _TransactionTab(
+      transactions: finance.tunaiTransactions,
+      totalIn: finance.tunaiIn,
+      totalOut: finance.tunaiOut,
+      label: "Tunai",
+      color: const Color(0xFF27AE60),
+      emptyIcon: Icons.payments_outlined,
+      emptyMsg:
+          "Belum ada transaksi tunai.\nCoba ucapkan ke AI: \"beli makan 20rb\"",
+    );
+  }
+}
+
+// ============================================================
+// NON TUNAI TAB
+// ============================================================
+class _NonTunaiTab extends StatelessWidget {
+  final FinanceProvider finance;
+  const _NonTunaiTab({required this.finance});
+
+  @override
+  Widget build(BuildContext context) {
+    return _TransactionTab(
+      transactions: finance.nonTunaiTransactions,
+      totalIn: finance.nonTunaiIn,
+      totalOut: finance.nonTunaiOut,
+      label: "Non Tunai",
+      color: const Color(0xFF2980B9),
+      emptyIcon: Icons.credit_card_outlined,
+      emptyMsg:
+          "Belum ada transaksi non tunai.\nCoba: \"bayar listrik via gopay 150rb\"",
+    );
+  }
+}
+
+// ============================================================
+// SHARING TAB
+// ============================================================
+class _SharingTab extends StatelessWidget {
+  final FinanceProvider finance;
+  const _SharingTab({required this.finance});
+
+  @override
+  Widget build(BuildContext context) {
+    return _TransactionTab(
+      transactions: finance.sharedTransactions,
+      totalIn: finance.sharedTotalIn,
+      totalOut: finance.sharedTotalOut,
+      label: "Bersama",
+      color: const Color(0xFF009688),
+      emptyIcon: Icons.group_outlined,
+      emptyMsg:
+          "Belum ada transaksi bersama.\nAjak teman untuk mencatat bersama!",
+    );
+  }
+}
+
+// ============================================================
+// GENERIC TRANSACTION TAB CONTENT
+// ============================================================
+class _TransactionTab extends StatefulWidget {
+  final List<TransactionModel> transactions;
+  final int totalIn;
+  final int totalOut;
+  final String label;
+  final Color color;
+  final IconData emptyIcon;
+  final String emptyMsg;
+
+  const _TransactionTab({
+    required this.transactions,
+    required this.totalIn,
+    required this.totalOut,
+    required this.label,
+    required this.color,
+    required this.emptyIcon,
+    required this.emptyMsg,
+  });
+
+  @override
+  State<_TransactionTab> createState() => _TransactionTabState();
+}
+
+class _TransactionTabState extends State<_TransactionTab> {
+  bool _showChartAnim = false;
+  int _refreshKey = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) setState(() => _showChartAnim = true);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _TransactionTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.transactions.length != widget.transactions.length ||
+        oldWidget.totalIn != widget.totalIn ||
+        oldWidget.totalOut != widget.totalOut) {
+      _refreshKey++;
+      _showChartAnim = false;
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (mounted) setState(() => _showChartAnim = true);
+      });
     }
   }
 
@@ -829,950 +935,335 @@ class _HomeScreenState extends State<HomeScreen> {
       if (i > 0 && (str.length - i) % 3 == 0) buf.write('.');
       buf.write(str[i]);
     }
-    return buf.toString();
+    return "Rp ${buf.toString()}";
+  }
+
+  String _compactAmount(int amount) {
+    if (amount >= 1000000) {
+      return "Rp ${(amount / 1000000).toStringAsFixed(1)}jt";
+    } else if (amount >= 1000) {
+      return "Rp ${(amount ~/ 1000)}rb";
+    }
+    return "Rp $amount";
   }
 
   String _compactNumber(double value) {
     if (value >= 1000000) {
-      String str = (value / 1000000).toStringAsFixed(1);
-      if (str.endsWith('.0')) str = str.substring(0, str.length - 2);
-      return '$str jt';
+      return "${(value / 1000000).toStringAsFixed(1)}jt";
     } else if (value >= 1000) {
-      String str = (value / 1000).toStringAsFixed(0);
-      return '$str rb';
+      return "${(value ~/ 1000)}rb";
     }
     return value.toInt().toString();
   }
 
-  IconData _getCategoryIcon(String category, String note) {
-    final text = note.toLowerCase();
-    if (text.contains('gojek') ||
-        text.contains('grab') ||
-        text.contains('ojek') ||
-        text.contains('parkir') ||
-        text.contains('bensin') ||
-        text.contains('maxim') ||
-        text.contains('tol'))
-      return Icons.two_wheeler;
-    if (text.contains('listrik') ||
-        text.contains('pln') ||
-        text.contains('token') ||
-        text.contains('air') ||
-        text.contains('wifi') ||
-        text.contains('internet') ||
-        text.contains('indihome'))
-      return Icons.receipt;
-    if (text.contains('dana') ||
-        text.contains('gopay') ||
-        text.contains('ovo') ||
-        text.contains('shopeepay') ||
-        text.contains('topup') ||
-        text.contains('top up'))
-      return Icons.account_balance_wallet;
-    if (text.contains('sayur') ||
-        text.contains('buah') ||
-        text.contains('beras') ||
-        text.contains('pasar') ||
-        text.contains('indomaret') ||
-        text.contains('alfamart'))
-      return Icons.local_grocery_store;
-    if (text.contains('makan') ||
-        text.contains('minum') ||
-        text.contains('kopi') ||
-        text.contains('bakso') ||
-        text.contains('ayam') ||
-        text.contains('warteg'))
-      return Icons.restaurant;
-    if (text.contains('gaji') ||
-        text.contains('bonus') ||
-        text.contains('thr') ||
-        text.contains('upah'))
-      return Icons.payments;
-    if (text.contains('pulsa') ||
-        text.contains('kuota') ||
-        text.contains('paket') ||
-        text.contains('axis') ||
-        text.contains('telkomsel'))
-      return Icons.phone_android;
-    if (text.contains('transfer') ||
-        text.contains('tf') ||
-        text.contains('kirim') ||
-        text.contains('terima'))
-      return Icons.swap_horiz;
-    if (text.contains('qris') || text.contains('scan')) return Icons.qr_code_2;
-    if (text.contains('obat') ||
-        text.contains('rs') ||
-        text.contains('dokter') ||
-        text.contains('apotek') ||
-        text.contains('klinik'))
-      return Icons.medical_services;
+  List<dynamic> _buildGroupedList(List<TransactionModel> transactions) {
+    List<dynamic> grouped = [];
+    String currentGroup = "";
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
 
-    switch (category) {
-      case 'Food':
-        return Icons.restaurant;
-      case 'Groceries':
-        return Icons.local_grocery_store;
-      case 'Transport':
-        return Icons.two_wheeler;
-      case 'Shopping':
-        return Icons.shopping_bag;
-      case 'Health':
-        return Icons.medical_services;
-      case 'Entertainment':
-        return Icons.sports_esports;
-      case 'Bills':
-        return Icons.receipt;
-      case 'EWallet':
-        return Icons.account_balance_wallet;
-      case 'Education':
-        return Icons.school;
-      case 'Charity':
-        return Icons.volunteer_activism;
-      case 'Investment':
-        return Icons.trending_up;
-      case 'Salary':
-        return Icons.payments;
-      case 'Business':
-        return Icons.store;
-      case 'Transfer_In':
-        return Icons.south_west;
-      case 'Transfer_Out':
-        return Icons.north_east;
-      default:
-        return Icons.receipt_long;
+    for (var tx in transactions) {
+      final txDate = tx.createdAt.toLocal();
+      final justTx = DateTime(txDate.year, txDate.month, txDate.day);
+      final diff = today.difference(justTx).inDays;
+
+      String groupName = "";
+      if (diff == 0) {
+        groupName = "Hari Ini";
+      } else if (diff == 1) {
+        groupName = "Kemarin";
+      } else if (diff > 1 && diff <= 7) {
+        groupName = "Minggu Ini";
+      } else if (diff > 7 && diff <= 14) {
+        groupName = "Minggu Lalu";
+      } else {
+        final months = [
+          'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+          'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+        ];
+        groupName = "${months[txDate.month - 1]} ${txDate.year}";
+      }
+
+      if (groupName != currentGroup) {
+        grouped.add(groupName);
+        currentGroup = groupName;
+      }
+      grouped.add(tx);
     }
+    return grouped;
   }
 
-  String _formatDateForTile(String isoDate) {
-    if (isoDate.isEmpty) return "Waktu tidak diketahui";
-    try {
-      final date = DateTime.parse(isoDate).toLocal();
-      final months = [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'Mei',
-        'Jun',
-        'Jul',
-        'Ags',
-        'Sep',
-        'Okt',
-        'Nov',
-        'Des',
-      ];
-      final day = date.day.toString().padLeft(2, '0');
-      final month = months[date.month - 1];
-      final year = date.year;
-      final hh = date.hour.toString().padLeft(2, '0');
-      final mm = date.minute.toString().padLeft(2, '0');
-      return "$day $month $year • $hh:$mm";
-    } catch (_) {
-      return isoDate;
-    }
-  }
-
-  // --- WIDGET CUSTOM SLIDING SWITCH (TEMA APPLE) ---
-  Widget _buildWorkspaceToggle(FinanceProvider finance, Color primaryColor) {
+  Widget _buildHeader(String title) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 24),
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(30),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final double switchWidth = constraints.maxWidth;
-          return Stack(
-            children: [
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeInOutCubic,
-                left: finance.isSharedMode ? switchWidth / 2 : 0,
-                child: Container(
-                  width: (switchWidth / 2) - 4,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: primaryColor.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(25),
-                  ),
-                ),
-              ),
-              Row(
-                children: [
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        if (finance.isSharedMode) finance.toggleWorkspace();
-                      },
-                      child: Container(
-                        height: 40,
-                        color: Colors.transparent,
-                        child: Center(
-                          child: Text(
-                            "Pribadi",
-                            style: TextStyle(
-                              color: !finance.isSharedMode
-                                  ? primaryColor
-                                  : Colors.grey.shade400,
-                              fontWeight: !finance.isSharedMode
-                                  ? FontWeight.w800
-                                  : FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () {
-                        if (!finance.isSharedMode) finance.toggleWorkspace();
-                      },
-                      child: Container(
-                        height: 40,
-                        color: Colors.transparent,
-                        child: Center(
-                          child: Text(
-                            "Bersama",
-                            style: TextStyle(
-                              color: finance.isSharedMode
-                                  ? primaryColor
-                                  : Colors.grey.shade400,
-                              fontWeight: finance.isSharedMode
-                                  ? FontWeight.w800
-                                  : FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final finance = context.watch<FinanceProvider>();
-    final Color primaryColor = finance.isSharedMode
-        ? const Color(0xFF009688)
-        : const Color(0xFF5E5CE6);
-    final List<Color> cardGradient = finance.isSharedMode
-        ? [const Color(0xFF00B4DB), const Color(0xFF0083B0)]
-        : [const Color(0xFF5E5CE6), const Color(0xFF8C52FF)];
-
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        if (isChatExpanded) {
-          context.read<VoiceService>().stop();
-          _toggleChat(false);
-          return;
-        }
-        final now = DateTime.now();
-        if (_lastPressedAt == null ||
-            now.difference(_lastPressedAt!) > const Duration(seconds: 2)) {
-          _lastPressedAt = now;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text(
-                'Tekan lagi untuk keluar',
-                style: TextStyle(color: Colors.white),
-              ),
-              backgroundColor: Colors.black87,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          );
-        } else {
-          Navigator.of(context).pop();
-        }
-      },
-      child: Scaffold(
-        key: _scaffoldKey, // KUNCI MENU DRAWER
-        backgroundColor: const Color(0xFFF4F6FC),
-        drawer: _buildSideMenu(primaryColor, finance), // PASANG DRAWER DI SINI
-        body: Stack(
-          children: [
-            _buildDashboard(finance, primaryColor, cardGradient),
-            _buildChatPanel(finance, primaryColor, cardGradient),
-          ],
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+      margin: const EdgeInsets.only(top: 14, bottom: 6),
+      child: Text(
+        title.toUpperCase(),
+        style: const TextStyle(
+          fontWeight: FontWeight.w800,
+          color: Color(0xFFA0A5BA),
+          fontSize: 11,
+          letterSpacing: 1.2,
         ),
       ),
     );
   }
 
-  // ==========================================
-  // UI: SIDE MENU (DRAWER)
-  // ==========================================
-  Widget _buildSideMenu(Color primaryColor, FinanceProvider finance) {
-    final user = FirebaseAuth.instance.currentUser;
-    final email = user?.email ?? "pengguna@email.com";
-
-    return Drawer(
-      backgroundColor: Colors.white,
-      child: Column(
-        children: [
-          UserAccountsDrawerHeader(
-            decoration: BoxDecoration(color: primaryColor),
-            accountName: const Text(
-              "Dompetku AI User",
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            accountEmail: Text(email),
-            currentAccountPicture: CircleAvatar(
-              backgroundColor: Colors.white,
-              child: Text(
-                email[0].toUpperCase(),
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: primaryColor,
-                ),
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.person_outline),
-            title: const Text('Profil Saya'),
-            onTap: () {
-              Navigator.pop(context);
-              // MENUJU KE LAYAR PROFIL
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.settings_outlined),
-            title: const Text('Pengaturan'),
-            onTap: () {
-              Navigator.pop(context);
-              // MENUJU KE LAYAR PENGATURAN
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.group_add_outlined),
-            title: const Text(
-              'Dompet Bersama',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            trailing: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.redAccent,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Text(
-                "ACTIVE",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            onTap: () {
-              Navigator.pop(context);
-              _showSharedWalletBottomSheet(primaryColor, finance);
-            },
-          ),
-          const Spacer(),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.redAccent),
-            title: const Text(
-              'Keluar (Logout)',
-              style: TextStyle(
-                color: Colors.redAccent,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            onTap: () async {
-              Navigator.pop(context);
-              await AuthService().signOut();
-              if (mounted)
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                );
-            },
-          ),
-          const SizedBox(height: 20),
-        ],
-      ),
-    );
-  }
-
-  // ==========================================
-  // UI: BOTTOM SHEET DOMPET BERSAMA (5-DIGIT)
-  // ==========================================
-  void _showSharedWalletBottomSheet(
-    Color primaryColor,
-    FinanceProvider finance,
-  ) {
-    final TextEditingController joinController = TextEditingController();
-    bool isProcessing = false;
+  void _showActionModal(BuildContext context, TransactionModel item) {
+    final finance = context.read<FinanceProvider>();
+    final int id = item.id ?? -1;
+    if (id == -1) return;
+    final String currentNote = item.note;
+    final int currentAmount = item.amount;
 
     showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          // StatefulBuilder agar tombol loading bisa berputar
-          builder: (BuildContext context, StateSetter setSheetState) {
-            return Container(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-              ),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(30.0),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade300,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      "Dompet Bersama",
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF1E1E2C),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      "Bagikan kode ini ke pasangan/teman Anda agar mereka bisa mengakses data di Mode Bersama.",
-                      style: TextStyle(color: Colors.grey, fontSize: 14),
-                    ),
-                    const SizedBox(height: 30),
-
-                    // BAGIAN 1: KODE SAYA
-                    const Text(
-                      "Kode Ruangan Anda:",
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1E1E2C),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 16,
-                      ),
-                      decoration: BoxDecoration(
-                        color: primaryColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: primaryColor.withOpacity(0.3),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            finance.myRoomCode,
-                            style: const TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 8,
-                            ),
-                          ),
-                          IconButton(
-                            icon: Icon(Icons.copy_rounded, color: primaryColor),
-                            onPressed: () {
-                              Clipboard.setData(
-                                ClipboardData(text: finance.myRoomCode),
-                              );
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text("Kode berhasil disalin!"),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 30),
-                    Row(
-                      children: [
-                        Expanded(child: Divider(color: Colors.grey.shade300)),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 10),
-                          child: Text(
-                            "ATAU",
-                            style: TextStyle(
-                              color: Colors.grey,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        Expanded(child: Divider(color: Colors.grey.shade300)),
-                      ],
-                    ),
-                    const SizedBox(height: 30),
-
-                    // BAGIAN 2: GABUNG KE RUANGAN TEMAN ATAU KEMBALI
-                    if (finance.isJoiningOtherRoom) ...[
-                      // JIKA SEDANG MENUMPANG DI RUANG TEMAN
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Column(
-                          children: [
-                            const Icon(
-                              Icons.warning_amber_rounded,
-                              color: Colors.orange,
-                              size: 40,
-                            ),
-                            const SizedBox(height: 10),
-                            const Text(
-                              "Anda sedang berada di Ruangan Teman",
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.orange,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.orange,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                              onPressed: () async {
-                                Navigator.pop(sheetContext);
-                                await finance.leaveSharedRoom();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      "Kembali ke ruangan sendiri.",
-                                    ),
-                                  ),
-                                );
-                              },
-                              child: const Text(
-                                "Keluar & Kembali ke Ruang Sendiri",
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ] else ...[
-                      // JIKA DI RUANG SENDIRI
-                      const Text(
-                        "Gabung ke Ruangan Teman:",
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1E1E2C),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: joinController,
-                        textCapitalization: TextCapitalization.characters,
-                        maxLength: 5,
-                        decoration: InputDecoration(
-                          hintText: "Masukkan 5 Digit Kode",
-                          counterText: "",
-                          filled: true,
-                          fillColor: Colors.grey.shade100,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: BorderSide.none,
-                          ),
-                          suffixIcon: Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: primaryColor,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                              onPressed: isProcessing
-                                  ? null
-                                  : () async {
-                                      if (joinController.text.length != 5)
-                                        return;
-                                      setSheetState(() => isProcessing = true);
-
-                                      bool success = await finance
-                                          .joinSharedRoom(joinController.text);
-
-                                      setSheetState(() => isProcessing = false);
-                                      if (success) {
-                                        Navigator.pop(sheetContext);
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              "Berhasil gabung ke ruang teman!",
-                                            ),
-                                            backgroundColor: Colors.green,
-                                          ),
-                                        );
-                                      } else {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              "Kode tidak ditemukan!",
-                                            ),
-                                            backgroundColor: Colors.redAccent,
-                                          ),
-                                        );
-                                      }
-                                    },
-                              child: isProcessing
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        color: Colors.white,
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Text(
-                                      "Gabung",
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 20),
-                  ],
+      isScrollControlled: true,
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.only(
+            bottom: 30,
+            top: 12,
+            left: 24,
+            right: 24,
+          ),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(30),
+              topRight: Radius.circular(30),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(10),
                 ),
               ),
-            );
-          },
+              const SizedBox(height: 24),
+              const Text(
+                "Opsi Transaksi",
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF1E1E2C),
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(height: 24),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF5E5CE6).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.edit_rounded,
+                    color: Color(0xFF5E5CE6),
+                  ),
+                ),
+                title: const Text(
+                  "Edit Transaksi",
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showEditDialog(
+                    context,
+                    finance,
+                    id,
+                    currentNote,
+                    currentAmount,
+                  );
+                },
+              ),
+              const Divider(),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF647C).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.delete_rounded,
+                    color: Color(0xFFFF647C),
+                  ),
+                ),
+                title: const Text(
+                  "Hapus Transaksi",
+                  style: TextStyle(
+                    color: Color(0xFFFF647C),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showDeleteConfirmation(context, finance, id, currentNote);
+                },
+              ),
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _buildDashboard(
+  void _showDeleteConfirmation(
+    BuildContext context,
     FinanceProvider finance,
-    Color primaryColor,
-    List<Color> cardGradient,
+    int id,
+    String note,
   ) {
-    return SafeArea(
-      child: RefreshIndicator(
-        color: primaryColor,
-        backgroundColor: Colors.white,
-        onRefresh: _handleRefresh,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 30),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(
-                          Icons.menu_rounded,
-                          size: 30,
-                          color: Color(0xFF1E1E2C),
-                        ),
-                        onPressed: () {
-                          _scaffoldKey.currentState?.openDrawer();
-                        },
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        "Dompetku",
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF1E1E2C),
-                        ),
-                      ),
-                    ],
-                  ),
-                  CloudSyncIndicator(status: finance.syncStatus),
-                ],
-              ),
-              const SizedBox(height: 20),
-
-              _buildWorkspaceToggle(finance, primaryColor),
-
-              _isLoading
-                  ? const Skeleton(
-                      height: 220,
-                      borderRadius: BorderRadius.all(Radius.circular(30)),
-                    )
-                  : _buildBalanceCard(finance, cardGradient, primaryColor),
-              const SizedBox(height: 36),
-              const Text(
-                "Analisis 7 Hari Terakhir",
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 18,
-                  color: Color(0xFF1E1E2C),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              _isLoading
-                  ? const Skeleton(
-                      height: 240,
-                      borderRadius: BorderRadius.all(Radius.circular(30)),
-                    )
-                  : _buildChart(finance),
-
-              const SizedBox(height: 36),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    "Histori Transaksi",
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 18,
-                      color: Color(0xFF1E1E2C),
-                    ),
-                  ),
-                  InkWell(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const TransactionHistoryScreen(),
-                      ),
-                    ),
-                    child: Text(
-                      "Lihat Semua",
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: primaryColor,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _isLoading
-                  ? Column(
-                      children: [
-                        const Skeleton(
-                          height: 80,
-                          borderRadius: BorderRadius.all(Radius.circular(20)),
-                        ),
-                        const SizedBox(height: 16),
-                        const Skeleton(
-                          height: 80,
-                          borderRadius: BorderRadius.all(Radius.circular(20)),
-                        ),
-                      ],
-                    )
-                  : _buildHistoryList(finance),
-              const SizedBox(height: 120),
-            ],
-          ),
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text(
+          "Hapus Transaksi?",
+          style: TextStyle(fontWeight: FontWeight.w800),
         ),
-      ),
-    );
-  }
-
-  Widget _buildBalanceCard(
-    FinanceProvider finance,
-    List<Color> cardGradient,
-    Color primaryColor,
-  ) {
-    final saldo = finance.totalIn - finance.totalOut;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 500),
-      curve: Curves.easeInOutCubic,
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: cardGradient,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+        content: Text(
+          "Apakah Anda yakin ingin menghapus '$note' secara permanen?",
         ),
-        borderRadius: BorderRadius.circular(30),
-        boxShadow: [
-          BoxShadow(
-            color: primaryColor.withOpacity(0.4),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              "Batal",
+              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w700),
+            ),
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                "Total Saldo",
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF647C),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
-              if (finance.isJoiningOtherRoom)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.link, color: Colors.white, size: 12),
-                      SizedBox(width: 4),
-                      Text(
-                        "Terhubung",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-
-          TweenAnimationBuilder<double>(
-            key: ValueKey<int>(_refreshKey),
-            tween: Tween<double>(begin: 0, end: saldo.toDouble()),
-            duration: const Duration(milliseconds: 1500),
-            curve: Curves.easeOutQuart,
-            builder: (context, value, child) {
-              return Text(
-                "Rp ${_formatRupiah(value.toInt())}",
-                style: const TextStyle(
-                  fontSize: 36,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  letterSpacing: -1,
+              elevation: 0,
+            ),
+            onPressed: () {
+              finance.deleteTransactionManual(id);
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("Transaksi dihapus"),
+                  backgroundColor: Color(0xFFFF647C),
                 ),
               );
             },
-          ),
-
-          const SizedBox(height: 24),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _sumColAnim("Pemasukan", finance.totalIn, Colors.greenAccent),
-              Container(
-                width: 1,
-                height: 40,
-                color: Colors.white.withOpacity(0.2),
+            child: const Text(
+              "Hapus",
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
               ),
-              _sumColAnim("Pengeluaran", finance.totalOut, Colors.orangeAccent),
-            ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _sumColAnim(String label, int amount, Color color) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        label,
-        style: const TextStyle(
-          fontSize: 12,
-          color: Colors.white60,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      const SizedBox(height: 4),
-      TweenAnimationBuilder<double>(
-        key: ValueKey<int>(_refreshKey),
-        tween: Tween<double>(begin: 0, end: amount.toDouble()),
-        duration: const Duration(milliseconds: 1500),
-        curve: Curves.easeOutQuart,
-        builder: (context, value, child) {
-          return Text(
-            "Rp ${_formatRupiah(value.toInt())}",
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: color,
-              fontSize: 15,
-            ),
-          );
-        },
-      ),
-    ],
-  );
+  void _showEditDialog(
+    BuildContext context,
+    FinanceProvider finance,
+    int id,
+    String oldNote,
+    int oldAmount,
+  ) {
+    final noteCtrl = TextEditingController(text: oldNote);
+    final amountCtrl = TextEditingController(text: oldAmount.toString());
 
-  Widget _buildChart(FinanceProvider finance) {
-    if (finance.history.isEmpty) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Text(
+          "Edit Transaksi",
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: noteCtrl,
+              decoration: InputDecoration(
+                labelText: "Nama Transaksi",
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: amountCtrl,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: "Nominal (Rp)",
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              "Batal",
+              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w700),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF5E5CE6),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 0,
+            ),
+            onPressed: () {
+              final newNote = noteCtrl.text.trim();
+              final newAmt =
+                  int.tryParse(
+                    AmountParser.cleanNumberString(amountCtrl.text),
+                  ) ??
+                  0;
+              if (newNote.isNotEmpty && newAmt > 0) {
+                finance.updateTransactionManual(id, newAmt, newNote);
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text("Data diperbarui"),
+                    backgroundColor: Color(0xFF00C48C),
+                  ),
+                );
+              }
+            },
+            child: const Text(
+              "Simpan",
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChart() {
+    if (widget.transactions.isEmpty) {
       return Container(
         height: 200,
         decoration: BoxDecoration(
@@ -1812,19 +1303,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
     double maxY = 0;
 
-    for (var tx in finance.history) {
-      final dateStr = tx['date'] as String?;
-      if (dateStr == null) continue;
-      final txDate = DateTime.tryParse(dateStr)?.toLocal();
-      if (txDate == null) continue;
-
+    for (var tx in widget.transactions) {
+      final txDate = tx.createdAt;
       final justTx = DateTime(txDate.year, txDate.month, txDate.day);
       final diff = justToday.difference(justTx).inDays;
 
       if (diff >= 0 && diff <= 6) {
         final index = 6 - diff;
-        final amt = (tx['amount'] as int).toDouble();
-        if (tx['type'] == 'OUT') {
+        final amt = tx.amount.toDouble();
+        if (tx.type.value == 'OUT') {
           outData[index] += amt;
         } else {
           inData[index] += amt;
@@ -1862,11 +1349,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return Container(
-      height: 240,
+      height: 220,
       padding: const EdgeInsets.only(top: 20, right: 10, bottom: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(30),
+        borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.02),
@@ -1978,562 +1465,486 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildHistoryList(FinanceProvider finance) {
-    final latestTransactions = finance.history.take(5).toList();
+  @override
+  Widget build(BuildContext context) {
+    final saldo = widget.totalIn - widget.totalOut;
 
-    if (latestTransactions.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: const Center(
-          child: Text(
-            "Belum ada data transaksi",
-            style: TextStyle(color: Colors.grey),
-          ),
-        ),
-      );
-    }
-
-    return Container(
+    return ListView(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(30),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.02),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: ListView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: latestTransactions.length,
-        itemBuilder: (context, i) {
-          final item = latestTransactions[i];
-          final isIn = item['type'] == 'IN';
-          final amountColor = isIn
-              ? const Color(0xFF00C48C)
-              : const Color(0xFFFF647C);
-          final amountPrefix = isIn ? "Rp" : "-Rp";
-          final arrowIcon = isIn ? Icons.arrow_upward : Icons.arrow_downward;
-          final note = item['note']?.toString() ?? 'Transaksi';
-          final category = item['category']?.toString() ?? 'Other';
-          final dateStr = item['date']?.toString() ?? '';
-          final amount = item['amount'] as int? ?? 0;
-
-          return Container(
-            margin: EdgeInsets.only(
-              bottom: i == latestTransactions.length - 1 ? 0 : 20,
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 50,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.grey.shade200, width: 1),
-                  ),
-                  child: Icon(
-                    _getCategoryIcon(category, note),
-                    color: const Color(0xFF1E1E2C),
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        note,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                          color: Color(0xFF1E1E2C),
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _formatDateForTile(dateStr),
-                        style: const TextStyle(
-                          color: Color(0xFFA0A5BA),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      "$amountPrefix${_formatRupiah(amount)}",
-                      style: TextStyle(
-                        color: amountColor,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: amountColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Icon(arrowIcon, color: amountColor, size: 12),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildChatPanel(
-    FinanceProvider finance,
-    Color primaryColor,
-    List<Color> cardGradient,
-  ) {
-    return AnimatedAlign(
-      duration: const Duration(milliseconds: 350),
-      curve: Curves.easeOutCubic,
-      alignment: isChatExpanded ? Alignment.center : Alignment.bottomCenter,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 350),
-        curve: Curves.easeOutCubic,
-        margin: EdgeInsets.all(isChatExpanded ? 0 : 24),
-        height: isChatExpanded ? MediaQuery.of(context).size.height : 65,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(isChatExpanded ? 0 : 40),
-          boxShadow: isChatExpanded
-              ? null
-              : [
-                  BoxShadow(
-                    color: primaryColor.withOpacity(0.15),
-                    blurRadius: 30,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-        ),
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
-          child: isChatExpanded
-              ? _buildFullChat(finance, primaryColor, cardGradient)
-              : _buildMiniChat(primaryColor),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMiniChat(Color primaryColor) => InkWell(
-    onTap: () => _toggleChat(true),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.auto_awesome, color: primaryColor, size: 20),
-        const SizedBox(width: 10),
-        Text(
-          "Tanya Asisten Finansial",
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            color: primaryColor,
-            fontSize: 16,
-          ),
-        ),
-      ],
-    ),
-  );
-
-  Widget _buildFullChat(
-    FinanceProvider finance,
-    Color primaryColor,
-    List<Color> cardGradient,
-  ) {
-    final int listCount =
-        finance.chatHistory.length + (finance.isAiThinking ? 1 : 0);
-
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4F6FC),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.auto_awesome, color: primaryColor, size: 18),
-                const SizedBox(width: 8),
-                const Text(
-                  "Asisten Finansial",
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF1E1E2C),
-                  ),
-                ),
-              ],
+        // Balance Card
+        Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [widget.color, widget.color.withOpacity(0.7)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
-            if (finance.activeResolvingPending != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text(
-                  '📝 "${finance.activeResolvingPending!.nama ?? finance.activeResolvingPending!.originalInput}"',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: primaryColor,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: widget.color.withOpacity(0.3),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
               ),
-          ],
-        ),
-        leading: IconButton(
-          icon: const Icon(
-            Icons.keyboard_arrow_down,
-            color: Color(0xFF1E1E2C),
-            size: 30,
-          ),
-          onPressed: () => _toggleChat(false),
-        ),
-        actions: const [PendingBadge()],
-      ),
-      body: Stack(
-        children: [
-          Column(
-            children: [
-              Expanded(
-                child: ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 20,
-                  ),
-                  itemCount: listCount,
-                  itemBuilder: (context, i) {
-                    if (i == finance.chatHistory.length)
-                      return AnimatedThinkingBubble(primaryColor: primaryColor);
-
-                    final m = finance.chatHistory[i];
-                    final isAi = m['isAi'] == 1;
-
-                    if (isAi && m['receiptData'] != null) {
-                      return Align(
-                        alignment: Alignment.centerLeft,
-                        child: ReceiptCard(receiptJson: m['receiptData']),
-                      );
-                    }
-
-                    if (isAi &&
-                        m.containsKey('queryResult') &&
-                        m['queryResult'] != null) {
-                      VizType parsedVizType = VizType.auto;
-                      try {
-                        parsedVizType = VizType.values.firstWhere(
-                          (e) =>
-                              e.toString().split('.').last ==
-                              (m['vizType']?.toString() ?? 'auto'),
-                          orElse: () => VizType.auto,
-                        );
-                      } catch (_) {}
-                      return Align(
-                        alignment: Alignment.centerLeft,
-                        child: QueryResultCard(
-                          aiSummary: m['text'] ?? "",
-                          result: m['queryResult'] as RawQueryResult,
-                          vizType: parsedVizType,
-                          originalQuestion:
-                              m['originalQuestion'] as String? ?? "",
-                        ),
-                      );
-                    }
-
-                    return Align(
-                      alignment: isAi
-                          ? Alignment.centerLeft
-                          : Alignment.centerRight,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 500),
-                        margin: const EdgeInsets.only(bottom: 12),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.75,
-                        ),
-                        decoration: BoxDecoration(
-                          gradient: isAi
-                              ? null
-                              : LinearGradient(colors: cardGradient),
-                          color: isAi ? Colors.white : null,
-                          boxShadow: isAi
-                              ? [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.03),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ]
-                              : [
-                                  BoxShadow(
-                                    color: primaryColor.withOpacity(0.3),
-                                    blurRadius: 10,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                          borderRadius: BorderRadius.only(
-                            topLeft: const Radius.circular(20),
-                            topRight: const Radius.circular(20),
-                            bottomRight: Radius.circular(isAi ? 20 : 5),
-                            bottomLeft: Radius.circular(isAi ? 5 : 20),
-                          ),
-                        ),
-                        child: Text(
-                          m['text'] ?? "",
-                          style: TextStyle(
-                            color: isAi
-                                ? const Color(0xFF1E1E2C)
-                                : Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            height: 1.4,
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              _buildInputArea(finance, primaryColor, cardGradient),
             ],
           ),
-
-          Positioned(
-            bottom: 110,
-            right: 20,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: _showScrollToBottom ? 1.0 : 0.0,
-              child: IgnorePointer(
-                ignoring: !_showScrollToBottom,
-                child: FloatingActionButton(
-                  mini: true,
-                  backgroundColor: Colors.white,
-                  elevation: 4,
-                  onPressed: _scrollToBottom,
-                  child: Icon(
-                    Icons.keyboard_arrow_down_rounded,
-                    color: primaryColor,
-                    size: 28,
-                  ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Saldo ${widget.label}",
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
-            ),
+              const SizedBox(height: 8),
+              TweenAnimationBuilder<double>(
+                key: ValueKey<int>(_refreshKey),
+                tween: Tween<double>(begin: 0, end: saldo.toDouble()),
+                duration: const Duration(milliseconds: 1500),
+                curve: Curves.easeOutQuart,
+                builder: (context, value, child) {
+                  return Text(
+                    _formatRupiah(value.toInt()),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.arrow_downward_rounded, color: Colors.white70, size: 16),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text("Masuk", style: TextStyle(color: Colors.white70, fontSize: 11)),
+                              TweenAnimationBuilder<double>(
+                                key: ValueKey<int>(_refreshKey),
+                                tween: Tween<double>(begin: 0, end: widget.totalIn.toDouble()),
+                                duration: const Duration(milliseconds: 1500),
+                                curve: Curves.easeOutQuart,
+                                builder: (context, value, child) {
+                                  return Text(
+                                    _compactAmount(value.toInt()),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.arrow_upward_rounded, color: Colors.white70, size: 16),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text("Keluar", style: TextStyle(color: Colors.white70, fontSize: 11)),
+                              TweenAnimationBuilder<double>(
+                                key: ValueKey<int>(_refreshKey),
+                                tween: Tween<double>(begin: 0, end: widget.totalOut.toDouble()),
+                                duration: const Duration(milliseconds: 1500),
+                                curve: Curves.easeOutQuart,
+                                builder: (context, value, child) {
+                                  return Text(
+                                    _compactAmount(value.toInt()),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
+        ),
+        const SizedBox(height: 24),
+        // Chart Section
+        Text(
+          "Analisis 7 Hari Terakhir",
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+            color: Colors.grey.shade800,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildChart(),
+        const SizedBox(height: 24),
+        // Transaction list
+        if (widget.transactions.isEmpty)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              child: Column(
+                children: [
+                  Icon(widget.emptyIcon, size: 64, color: Colors.grey.shade300),
+                  const SizedBox(height: 16),
+                  Text(
+                    widget.emptyMsg,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.grey.shade500,
+                      fontSize: 14,
+                      height: 1.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else ...[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                "Transaksi Terakhir",
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.grey.shade800,
+                ),
+              ),
+              Text(
+                "${widget.transactions.length} transaksi",
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ..._buildGroupedList(widget.transactions.take(20).toList()).map((item) {
+            if (item is String) {
+              return _buildHeader(item);
+            } else {
+              final tx = item as TransactionModel;
+              return _TransactionTile(
+                tx: tx,
+                accentColor: widget.color,
+                onTap: () => _showActionModal(context, tx),
+              );
+            }
+          }),
         ],
-      ),
+
+      ],
     );
   }
+}
 
-  Widget _buildInputArea(
-    FinanceProvider finance,
-    Color primaryColor,
-    List<Color> cardGradient,
-  ) {
-    final voice = Provider.of<VoiceService>(context);
-    final isWaiting = finance.isWaitingDirectReply;
+class _TransactionTile extends StatelessWidget {
+  final TransactionModel tx;
+  final Color accentColor;
+  final VoidCallback? onTap;
 
-    return Container(
-      color: Colors.transparent,
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (finance.activeResolvingPending != null)
-            Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                color: isWaiting ? primaryColor.withOpacity(0.1) : Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isWaiting ? primaryColor : Colors.grey.shade300,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.03),
-                    blurRadius: 10,
-                  ),
-                ],
+  const _TransactionTile({required this.tx, required this.accentColor, this.onTap});
+
+  String _formatDate(DateTime dt) {
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'Mei',
+      'Jun',
+      'Jul',
+      'Ags',
+      'Sep',
+      'Okt',
+      'Nov',
+      'Des',
+    ];
+    return "${dt.day} ${months[dt.month - 1]} • ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isIn = tx.type == TransactionType.income;
+    final amt = tx.amount;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.03),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
               ),
-              child: Row(
-                children: [
-                  Icon(
-                    isWaiting ? Icons.reply : Icons.pending_actions,
-                    size: 16,
-                    color: primaryColor,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      finance.activeResolvingPending!.aiQuestion,
+            ],
+          ),
+          child: Row(
+            children: [
+              // Icon
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: (isIn ? Colors.green : Colors.red).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  isIn ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded,
+                  color: isIn ? Colors.green : Colors.redAccent,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      tx.note,
                       style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF1E1E2C),
                         fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                        color: Color(0xFF1E1E2C),
                       ),
-                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  GestureDetector(
-                    onTap: () {
-                      finance.setActiveResolvingPending(null);
-                      finance.setWaitingDirectReply(false);
-                    },
-                    child: const Icon(
-                      Icons.close,
-                      size: 16,
-                      color: Colors.grey,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(40),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 20,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _textController,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF1E1E2C),
-                    ),
-                    decoration: InputDecoration(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 24,
-                        vertical: 18,
-                      ),
-                      hintText: isWaiting
-                          ? "Ketik jawaban..."
-                          : finance.activeResolvingPending != null
-                          ? "Ketik jawaban..."
-                          : "Ketik transaksi...",
-                      hintStyle: TextStyle(
-                        color: Colors.grey.shade400,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      border: InputBorder.none,
-                    ),
-                    onChanged: (text) {
-                      setState(() {});
-                    },
-                    onSubmitted: (v) {
-                      _processMessage(v);
-                      _textController.clear();
-                      setState(() {});
-                    },
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 500),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(colors: cardGradient),
-                      boxShadow: [
-                        BoxShadow(
-                          color: primaryColor.withOpacity(0.4),
-                          blurRadius: 8,
-                          offset: const Offset(0, 4),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: accentColor.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            tx.category,
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: accentColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _formatDate(tx.createdAt.toLocal()),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey.shade400,
+                          ),
                         ),
                       ],
                     ),
-                    child: IconButton(
-                      onPressed: () {
-                        if (_textController.text.isNotEmpty) {
-                          _processMessage(_textController.text);
-                          _textController.clear();
-                          setState(() {});
-                        } else {
-                          voice.startListening(
-                            onResult: (t, f) {
-                              _textController.text = t;
-                              if (f) {
-                                _processMessage(t);
-                                _textController.clear();
-                                setState(() {});
-                              }
-                            },
-                          );
-                        }
-                      },
-                      icon: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 300),
-                        transitionBuilder:
-                            (Widget child, Animation<double> animation) {
-                              return ScaleTransition(
-                                scale: animation,
-                                child: child,
-                              );
-                            },
-                        child: Icon(
-                          _textController.text.isNotEmpty
-                              ? Icons.send_rounded
-                              : Icons.mic_rounded,
-                          key: ValueKey<bool>(_textController.text.isNotEmpty),
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                    ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              // Amount
+              Text(
+                "${isIn ? '+' : '-'} Rp ${_formatAmt(amt)}",
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: isIn ? Colors.green.shade700 : Colors.red.shade700,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
+      ),
+    );
+  }
+
+  String _formatAmt(int n) {
+    final s = n.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write('.');
+      buf.write(s[i]);
+    }
+    return buf.toString();
+  }
+}
+
+// ============================================================
+// THINKING BUBBLE & DOTS
+// ============================================================
+class _ThinkingBubble extends StatelessWidget {
+  const _ThinkingBubble();
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(18),
+            topRight: Radius.circular(18),
+            bottomRight: Radius.circular(18),
+            bottomLeft: Radius.circular(4),
+          ),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: Color(0xFF5E5CE6),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              "AI sedang berpikir...",
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 13,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-extension IterableExtension<T> on Iterable<T> {
-  Iterable<T> takeLast(int n) {
-    final list = toList();
-    return list.skip((list.length - n).clamp(0, list.length));
+class _ThinkingDots extends StatefulWidget {
+  const _ThinkingDots();
+
+  @override
+  State<_ThinkingDots> createState() => _ThinkingDotsState();
+}
+
+class _ThinkingDotsState extends State<_ThinkingDots> {
+  int _count = 0;
+  late Timer _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 400), (_) {
+      if (mounted) setState(() => _count = (_count + 1) % 4);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      '.' * _count,
+      style: const TextStyle(
+        color: Color(0xFF5E5CE6),
+        fontWeight: FontWeight.bold,
+        fontSize: 16,
+      ),
+    );
   }
 }
+
+class Skeleton extends StatefulWidget {
+  final double? width, height;
+  final BorderRadius? borderRadius;
+  const Skeleton({super.key, this.width, this.height, this.borderRadius});
+  @override
+  State<Skeleton> createState() => _SkeletonState();
+}
+
+class _SkeletonState extends State<Skeleton>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: Tween<double>(begin: 0.4, end: 1.0).animate(_controller),
+      child: Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade300,
+          borderRadius: widget.borderRadius ?? BorderRadius.circular(8),
+        ),
+      ),
+    );
+  }
+}
+
+// (end of file)

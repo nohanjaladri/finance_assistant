@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/finance_provider.dart';
 import '../../core/utils/amount_parser.dart';
+import '../../data/models/transaction_model.dart';
 
 class TransactionHistoryScreen extends StatelessWidget {
   const TransactionHistoryScreen({super.key});
@@ -37,60 +38,69 @@ class TransactionHistoryScreen extends StatelessWidget {
         text.contains('parkir') ||
         text.contains('bensin') ||
         text.contains('maxim') ||
-        text.contains('tol'))
+        text.contains('tol')) {
       return Icons.two_wheeler;
+    }
     if (text.contains('listrik') ||
         text.contains('pln') ||
         text.contains('token') ||
         text.contains('air') ||
         text.contains('wifi') ||
         text.contains('internet') ||
-        text.contains('indihome'))
+        text.contains('indihome')) {
       return Icons.receipt;
+    }
     if (text.contains('dana') ||
         text.contains('gopay') ||
         text.contains('ovo') ||
         text.contains('shopeepay') ||
         text.contains('topup') ||
-        text.contains('top up'))
+        text.contains('top up')) {
       return Icons.account_balance_wallet;
+    }
     if (text.contains('sayur') ||
         text.contains('buah') ||
         text.contains('beras') ||
         text.contains('pasar') ||
         text.contains('indomaret') ||
-        text.contains('alfamart'))
+        text.contains('alfamart')) {
       return Icons.local_grocery_store;
+    }
     if (text.contains('makan') ||
         text.contains('minum') ||
         text.contains('kopi') ||
         text.contains('bakso') ||
         text.contains('ayam') ||
-        text.contains('warteg'))
+        text.contains('warteg')) {
       return Icons.restaurant;
+    }
     if (text.contains('gaji') ||
         text.contains('bonus') ||
         text.contains('thr') ||
-        text.contains('upah'))
+        text.contains('upah')) {
       return Icons.payments;
+    }
     if (text.contains('pulsa') ||
         text.contains('kuota') ||
         text.contains('paket') ||
         text.contains('axis') ||
-        text.contains('telkomsel'))
+        text.contains('telkomsel')) {
       return Icons.phone_android;
+    }
     if (text.contains('transfer') ||
         text.contains('tf') ||
         text.contains('kirim') ||
-        text.contains('terima'))
+        text.contains('terima')) {
       return Icons.swap_horiz;
+    }
     if (text.contains('qris') || text.contains('scan')) return Icons.qr_code_2;
     if (text.contains('obat') ||
         text.contains('rs') ||
         text.contains('dokter') ||
         text.contains('apotek') ||
-        text.contains('klinik'))
+        text.contains('klinik')) {
       return Icons.medical_services;
+    }
 
     switch (category) {
       case 'Food':
@@ -128,21 +138,14 @@ class TransactionHistoryScreen extends StatelessWidget {
     }
   }
 
-  List<dynamic> _buildGroupedList(List<Map<String, dynamic>> transactions) {
+  List<dynamic> _buildGroupedList(List<TransactionModel> transactions) {
     List<dynamic> grouped = [];
     String currentGroup = "";
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
     for (var tx in transactions) {
-      final dateStr = tx['date'] as String? ?? '';
-      DateTime txDate;
-      try {
-        txDate = DateTime.parse(dateStr).toLocal();
-      } catch (_) {
-        txDate = now;
-      }
-
+      final txDate = tx.createdAt.toLocal();
       final justTx = DateTime(txDate.year, txDate.month, txDate.day);
       final diff = today.difference(justTx).inDays;
 
@@ -208,11 +211,12 @@ class TransactionHistoryScreen extends StatelessWidget {
   // ==========================================
   // FITUR MANUAL UPDATE & DELETE (MODAL)
   // ==========================================
-  void _showActionModal(BuildContext context, Map<String, dynamic> item) {
+  void _showActionModal(BuildContext context, TransactionModel item) {
     final finance = context.read<FinanceProvider>();
-    final int id = item['id'] as int;
-    final String currentNote = item['note']?.toString() ?? '';
-    final int currentAmount = item['amount'] as int? ?? 0;
+    final int id = item.id ?? -1;
+    if (id == -1) return;
+    final String currentNote = item.note;
+    final int currentAmount = item.amount;
 
     showModalBottomSheet(
       context: context,
@@ -248,15 +252,28 @@ class TransactionHistoryScreen extends StatelessWidget {
               const Text(
                 "Opsi Transaksi",
                 style: TextStyle(
-                  fontSize: 18,
                   fontWeight: FontWeight.w800,
                   color: Color(0xFF1E1E2C),
+                  fontSize: 18,
                 ),
               ),
               const SizedBox(height: 24),
-
-              // TOMBOL EDIT
-              InkWell(
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF5E5CE6).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.edit_rounded,
+                    color: Color(0xFF5E5CE6),
+                  ),
+                ),
+                title: const Text(
+                  "Edit Transaksi",
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
                 onTap: () {
                   Navigator.pop(ctx);
                   _showEditDialog(
@@ -267,65 +284,31 @@ class TransactionHistoryScreen extends StatelessWidget {
                     currentAmount,
                   );
                 },
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 16,
-                    horizontal: 20,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE8E7FF),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.edit_rounded, color: Color(0xFF5E5CE6)),
-                      SizedBox(width: 16),
-                      Text(
-                        "Edit Transaksi",
-                        style: TextStyle(
-                          color: Color(0xFF5E5CE6),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ),
-              const SizedBox(height: 12),
-
-              // TOMBOL HAPUS
-              InkWell(
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _showDeleteConfirmation(context, finance, id, currentNote);
-                },
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 16,
-                    horizontal: 20,
-                  ),
+              const Divider(),
+              ListTile(
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFF647C).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.delete_rounded, color: Color(0xFFFF647C)),
-                      SizedBox(width: 16),
-                      Text(
-                        "Hapus Transaksi",
-                        style: TextStyle(
-                          color: Color(0xFFFF647C),
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
+                  child: const Icon(
+                    Icons.delete_rounded,
+                    color: Color(0xFFFF647C),
                   ),
                 ),
+                title: const Text(
+                  "Hapus Permanen",
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFFF647C),
+                  ),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showDeleteConfirmDialog(context, finance, id, currentNote);
+                },
               ),
             ],
           ),
@@ -334,7 +317,7 @@ class TransactionHistoryScreen extends StatelessWidget {
     );
   }
 
-  void _showDeleteConfirmation(
+  void _showDeleteConfirmDialog(
     BuildContext context,
     FinanceProvider finance,
     int id,
@@ -481,20 +464,16 @@ class TransactionHistoryScreen extends StatelessWidget {
   }
   // ==========================================
 
-  Widget _buildTransactionTile(
-    BuildContext context,
-    Map<String, dynamic> item,
-  ) {
-    final isIn = item['type'] == 'IN';
+  Widget _buildTransactionTile(BuildContext context, TransactionModel item) {
+    final isIn = item.type == TransactionType.income;
     final amountColor = isIn
         ? const Color(0xFF00C48C)
         : const Color(0xFFFF647C);
     final amountPrefix = isIn ? "Rp" : "-Rp";
     final arrowIcon = isIn ? Icons.arrow_upward : Icons.arrow_downward;
-    final note = item['note']?.toString() ?? 'Transaksi';
-    final category = item['category']?.toString() ?? 'Other';
-    final dateStr = item['date']?.toString() ?? '';
-    final amount = item['amount'] as int? ?? 0;
+    final note = item.note;
+    final category = item.category;
+    final amount = item.amount;
 
     return InkWell(
       onTap: () => _showActionModal(context, item),
@@ -541,7 +520,7 @@ class TransactionHistoryScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    _formatTimeOnly(dateStr),
+                    _formatTimeOnly(item.createdAt.toIso8601String()),
                     style: const TextStyle(
                       color: Color(0xFFA0A5BA),
                       fontSize: 13,
@@ -623,7 +602,7 @@ class TransactionHistoryScreen extends StatelessWidget {
                 } else {
                   return _buildTransactionTile(
                     context,
-                    item as Map<String, dynamic>,
+                    item as TransactionModel,
                   );
                 }
               },

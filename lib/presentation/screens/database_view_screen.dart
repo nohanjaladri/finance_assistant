@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/finance_provider.dart';
+import '../../data/models/transaction_model.dart';
 
 class DatabaseViewScreen extends StatefulWidget {
   const DatabaseViewScreen({super.key});
@@ -91,7 +92,7 @@ class _DatabaseViewScreenState extends State<DatabaseViewScreen> {
 }
 
 class TransactionDataSource extends DataTableSource {
-  final List<Map<String, dynamic>> _data;
+  final List<TransactionModel> _data;
 
   TransactionDataSource(this._data);
 
@@ -118,13 +119,13 @@ class TransactionDataSource extends DataTableSource {
   DataRow? getRow(int index) {
     if (index >= _data.length) return null;
     final item = _data[index];
-    final isIn = item['type'] == 'IN';
+    final isIn = item.type == TransactionType.income;
 
     return DataRow(
       cells: [
-        DataCell(Text(item['id'].toString())),
-        DataCell(Text(_formatDate(item['date'] ?? ''))),
-        DataCell(Text(item['note'] ?? '')),
+        DataCell(Text(item.id?.toString() ?? '-')),
+        DataCell(Text(_formatDate(item.createdAt.toIso8601String()))),
+        DataCell(Text(item.note)),
         DataCell(
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -135,7 +136,7 @@ class TransactionDataSource extends DataTableSource {
               borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
-              item['type'] ?? '',
+              item.type.value,
               style: TextStyle(
                 color: isIn ? Colors.teal : Colors.deepOrange,
                 fontWeight: FontWeight.bold,
@@ -144,10 +145,10 @@ class TransactionDataSource extends DataTableSource {
             ),
           ),
         ),
-        DataCell(Text(item['category'] ?? '')),
+        DataCell(Text(item.category)),
         DataCell(
           Text(
-            _formatRupiah(item['amount'] as int),
+            _formatRupiah(item.amount),
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
         ),

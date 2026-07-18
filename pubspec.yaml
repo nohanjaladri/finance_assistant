@@ -1,59 +1,49 @@
-name: finnance_assist
-description: "A new Flutter project."
-# The following line prevents the package from being accidentally published to
-# pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+name: finance_assistant
+description: "Dompetku AI - Asisten Keuangan Cerdas dengan AI Agent"
+publish_to: 'none'
 
-# The following defines the version and build number for your application.
-# A version number is three numbers separated by dots, like 1.2.43
-# followed by an optional build number separated by a +.
-# Both the version and the builder number may be overridden in flutter
-# build by specifying --build-name and --build-number, respectively.
-# In Android, build-name is used as versionName while build-number used as versionCode.
-# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
-# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
-# Read more about iOS versioning at
-# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
-# In Windows, build-name is used as the major, minor, and patch parts
-# of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 2.0.0+1
 
 environment:
   sdk: ^3.10.4
 
-# Dependencies specify other packages that your package needs in order to work.
-# To automatically upgrade your package dependencies to the latest versions
-# consider running `flutter pub upgrade --major-versions`. Alternatively,
-# dependencies can be manually updated by changing the version numbers below to
-# the latest version available on pub.dev. To see which dependencies have newer
-# versions available, run `flutter pub outdated`.
 dependencies:
   flutter:
     sdk: flutter
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
-  provider: ^6.1.5+1 # State Management
-  speech_to_text: ^7.3.0 # STT
-  flutter_tts: ^4.2.5 # TTS
-  fl_chart: ^1.1.1 # Grafik Keuangan
-  sqflite: ^2.3.0 # Database
+
+  # === STATE MANAGEMENT ===
+  provider: ^6.1.5+1
+
+  # === DATABASE & BACKEND ===
+  supabase_flutter: ^2.9.1       # Primary DB + Auth + Realtime
+  sqflite: ^2.3.0                # Local cache untuk offline-first
   path: ^1.8.3
-  vibration: ^3.1.8 # Haptic Feedback pengganti beep
-  permission_handler: ^11.3.1 # Tambahkan ini
-  google_generative_ai: ^0.4.0 # Tambahkan ini
-  dio: ^5.9.2
-  intl: ^0.18.1 # Untuk format tanggal dan waktu
-  flutter_dotenv: ^5.0.2 # Untuk mengelola variabel lingkungan seperti API key
-  firebase_core: ^4.5.0
-  firebase_database: ^12.1.4
-  firebase_auth: ^6.2.0
-  shared_preferences: ^2.5.4
+
+  # === AI SERVICES ===
+  dio: ^5.9.2                    # HTTP client untuk Groq API (primary AI)
+  google_generative_ai: ^0.4.6   # Gemini API (fallback AI layer 1)
+
+  # === VOICE ===
+  speech_to_text: ^7.3.0        # STT - Input suara
+  flutter_tts: ^4.2.5           # TTS - Output suara
+  vibration: ^3.1.8             # Haptic feedback
+
+  # === UI & CHARTS ===
+  fl_chart: ^1.1.1               # Grafik keuangan
+  intl: ^0.18.1                  # Format tanggal & angka (Rupiah)
+  google_fonts: ^6.2.1
+
+  # === UTILITIES ===
+  flutter_dotenv: ^5.0.2         # Env variables (.env file)
+  shared_preferences: ^2.5.4     # Local key-value storage
+  permission_handler: ^11.3.1    # Runtime permissions
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  mocktail: ^1.0.4
   flutter_launcher_icons: ^0.13.1
 
   # The "flutter_lints" package below contains a set of recommended lints to

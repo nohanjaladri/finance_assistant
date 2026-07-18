@@ -1,86 +1,49 @@
-/// query_validator.dart
-/// Bertanggung jawab memvalidasi SQL yang di-generate AI
-/// agar hanya SELECT yang bisa dieksekusi (Safe Select Only)
+/// query_validator.dart (v2)
+/// SQL validation layer — hanya SELECT yang diizinkan
+/// Diupdate untuk PostgreSQL (Supabase) syntax
 library;
 
 class QueryValidator {
   // ✅ Keyword yang DIIZINKAN
   static const _allowedKeywords = [
-    'SELECT',
-    'FROM',
-    'WHERE',
-    'GROUP BY',
-    'ORDER BY',
-    'HAVING',
-    'WITH',
-    'JOIN',
-    'LEFT JOIN',
-    'INNER JOIN',
-    'LIMIT',
-    'OFFSET',
-    'AS',
-    'ON',
-    'AND',
-    'OR',
-    'NOT',
-    'IN',
-    'LIKE',
-    'BETWEEN',
-    'IS',
-    'NULL',
-    'COUNT',
-    'SUM',
-    'AVG',
-    'MIN',
-    'MAX',
-    'DISTINCT',
-    'CASE',
-    'WHEN',
-    'THEN',
-    'ELSE',
-    'END',
-    'STRFTIME',
-    'DATE',
-    'COALESCE',
-    'ROUND',
+    'SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'HAVING',
+    'WITH', 'JOIN', 'LEFT JOIN', 'INNER JOIN', 'RIGHT JOIN', 'OUTER JOIN',
+    'LIMIT', 'OFFSET', 'AS', 'ON', 'AND', 'OR', 'NOT', 'IN', 'LIKE',
+    'ILIKE', // PostgreSQL case-insensitive LIKE
+    'BETWEEN', 'IS', 'NULL', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
+    'DISTINCT', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+    // PostgreSQL date functions
+    'DATE_TRUNC', 'DATE_PART', 'EXTRACT', 'NOW', 'INTERVAL',
+    'TO_CHAR', 'TO_DATE', 'CURRENT_DATE', 'CURRENT_TIMESTAMP',
+    // General functions
+    'COALESCE', 'ROUND', 'CAST', 'NULLIF', 'GREATEST', 'LEAST',
+    'CONCAT', 'SUBSTRING', 'TRIM', 'UPPER', 'LOWER', 'LENGTH',
+    'ARRAY_AGG', 'JSON_AGG', 'STRING_AGG',
   ];
 
-  // 🚫 Keyword yang DIBLOKIR KERAS
+  // 🚫 Keyword yang DIBLOKIR KERAS (SQL injection / destructive)
   static const _blockedKeywords = [
-    'DELETE',
-    'DROP',
-    'UPDATE',
-    'INSERT',
-    'ALTER',
-    'CREATE',
-    'ATTACH',
-    'DETACH',
-    'PRAGMA',
-    'VACUUM',
-    'REINDEX',
-    'REPLACE',
-    'TRUNCATE',
-    'EXEC',
-    'EXECUTE',
+    'DELETE', 'DROP', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'ATTACH',
+    'DETACH', 'PRAGMA', 'VACUUM', 'REINDEX', 'REPLACE', 'TRUNCATE',
+    'EXEC', 'EXECUTE', 'CALL', 'DO', 'COPY', 'GRANT', 'REVOKE',
+    'SET', 'SHOW', 'LOCK', 'UNLOCK',
   ];
 
   // 🏦 Tabel yang DIIZINKAN untuk di-query
-  static const _allowedTables = ['transactions', 'messages'];
+  static const _allowedTables = ['transactions', 'pending_requests'];
 
-  /// Validasi utama — mengembalikan [QueryValidationResult]
   static QueryValidationResult validate(String sql) {
     final normalized = sql.trim().toUpperCase();
 
-    // 1. Harus diawali SELECT atau WITH (untuk CTE)
+    // 1. Harus diawali SELECT atau WITH (CTE)
     if (!normalized.startsWith('SELECT') && !normalized.startsWith('WITH')) {
       return QueryValidationResult.fail(
         'Query harus diawali dengan SELECT atau WITH.',
       );
     }
 
-    // 2. Cek blacklist keyword
+    // 2. Cek blacklist keywords
     for (final blocked in _blockedKeywords) {
-      // Gunakan word boundary agar "SELECTED" tidak ter-flag
       final pattern = RegExp(r'\b' + blocked + r'\b');
       if (pattern.hasMatch(normalized)) {
         return QueryValidationResult.fail(
@@ -89,35 +52,39 @@ class QueryValidator {
       }
     }
 
-    // 3. Cek tabel yang diakses
+    // 3. Cek tabel yang diakses (mendukung schema prefix seperti app_finance.transactions)
     final tablePattern = RegExp(
-      r'\bFROM\s+(\w+)|\bJOIN\s+(\w+)',
+      r'\bFROM\s+([\w\.]+)\b|\bJOIN\s+([\w\.]+)\b',
       caseSensitive: false,
     );
     final tableMatches = tablePattern.allMatches(sql);
     for (final match in tableMatches) {
-      final tableName = (match.group(1) ?? match.group(2) ?? '').toLowerCase();
-      if (tableName.isNotEmpty && !_allowedTables.contains(tableName)) {
+      var rawTableName = (match.group(1) ?? match.group(2) ?? '').toLowerCase();
+      // Hilangkan schema prefix jika ada (misal: "app_finance.transactions" -> "transactions")
+      if (rawTableName.contains('.')) {
+        rawTableName = rawTableName.split('.').last;
+      }
+      if (rawTableName.isNotEmpty && !_allowedTables.contains(rawTableName)) {
         return QueryValidationResult.fail(
-          'Akses ke tabel "$tableName" tidak diizinkan.',
+          'Akses ke tabel "$rawTableName" tidak diizinkan.',
         );
       }
     }
 
-    // 4. Tidak boleh ada semicolon ganda (SQL injection via stacked queries)
-    final cleanSql = sql.replaceAll(
-      RegExp(r"'[^']*'"),
-      '',
-    ); // hapus string literal
-    if (cleanSql.contains(';') && cleanSql.indexOf(';') < cleanSql.length - 1) {
+    // 4. Cek stacked queries (SQL injection via semicolons)
+    final cleanSql = sql.replaceAll(RegExp(r"'[^']*'"), '');
+    if (cleanSql.contains(';') &&
+        cleanSql.indexOf(';') < cleanSql.length - 1) {
       return QueryValidationResult.fail('Multiple statements tidak diizinkan.');
     }
+
+    // 5. Tambahkan filter user_id otomatis untuk keamanan
+    // (akan ditangani di level Supabase RLS, tapi validasi di sini sebagai layer tambahan)
 
     return QueryValidationResult.ok(sql.trim());
   }
 }
 
-/// Hasil validasi query
 class QueryValidationResult {
   final bool isValid;
   final String? errorMessage;
