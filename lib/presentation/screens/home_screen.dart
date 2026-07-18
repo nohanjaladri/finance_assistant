@@ -163,24 +163,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           voice.speak(response.reply);
         }
 
-        // Process transaction locally if intent matches
+        // Refresh data from Supabase since the backend already inserted the transaction
         if (response.intent == 'ADD_EXPENSE' || response.intent == 'ADD_INCOME') {
-          final note = response.extractedData['note']?.toString() ?? 'Transaksi';
-          final amount = int.tryParse(response.extractedData['amount']?.toString() ?? '0') ?? 0;
-          final category = response.extractedData['category']?.toString() ?? 'Other';
-          final pmStr = response.extractedData['payment_method']?.toString() ?? 'tunai';
-          final pm = pmStr == 'non_tunai' ? PaymentMethod.nonTunai : PaymentMethod.tunai;
-          final type = response.intent == 'ADD_INCOME' ? 'IN' : 'OUT';
-
-          if (amount > 0) {
-            await finance.addTransaction(
-              amount: amount,
-              note: note,
-              type: type,
-              category: category,
-              paymentMethod: pm,
-            );
-          }
+          await finance.refreshAll();
         }
       } else {
         await finance.addMessage("Maaf, gagal terhubung ke backend AI.", true);
