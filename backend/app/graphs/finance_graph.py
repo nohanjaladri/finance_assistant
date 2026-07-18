@@ -121,8 +121,11 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     user_id = state.get("user_id", "default_user")
     
     if intent in ["ADD_EXPENSE", "ADD_INCOME"]:
-        note = extracted_data.get("note") or "Transaksi"
         amount = extracted_data.get("amount") or 0
+        if amount <= 0:
+            return {"response": "Maaf, saya tidak dapat mencatat transaksi jika nominalnya kosong atau nol. Silakan sebutkan jumlah uangnya secara jelas."}
+            
+        note = extracted_data.get("note") or "Transaksi"
         category = extracted_data.get("category") or "Other"
         pm = extracted_data.get("payment_method") or "tunai"
         tx_type = "OUT" if intent == "ADD_EXPENSE" else "IN"
