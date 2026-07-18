@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 import '../../data/models/transaction_model.dart';
+import '../../data/services/backend_ai_service.dart';
 import '../../data/services/supabase_service.dart';
 import '../../data/services/voice_service.dart';
 import '../providers/finance_provider.dart';
@@ -143,9 +144,51 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _textController.clear();
 
     final finance = context.read<FinanceProvider>();
+    final voice = context.read<VoiceService>();
+
+    // Add user message to UI
     await finance.addMessage(text, false);
-    await finance.addMessage("Fitur AI sedang dinonaktifkan untuk pemeliharaan/perombakan.", true);
+    finance.setAiThinking(true);
     _scrollChatToBottom();
+
+    try {
+      final response = await BackendAiService().sendMessage(text);
+      if (response != null) {
+        // Show AI reply
+        await finance.addMessage(response.reply, true);
+        if (_isChatExpanded) {
+          voice.speak(response.reply);
+        }
+
+        // Process transaction locally if intent matches
+        if (response.intent == 'ADD_EXPENSE' || response.intent == 'ADD_INCOME') {
+          final note = response.extractedData['note']?.toString() ?? 'Transaksi';
+          final amount = int.tryParse(response.extractedData['amount']?.toString() ?? '0') ?? 0;
+          final category = response.extractedData['category']?.toString() ?? 'Other';
+          final pmStr = response.extractedData['payment_method']?.toString() ?? 'tunai';
+          final pm = pmStr == 'non_tunai' ? PaymentMethod.nonTunai : PaymentMethod.tunai;
+          final type = response.intent == 'ADD_INCOME' ? 'IN' : 'OUT';
+
+          if (amount > 0) {
+            await finance.addTransaction(
+              amount: amount,
+              note: note,
+              type: type,
+              category: category,
+              paymentMethod: pm,
+            );
+          }
+        }
+      } else {
+        await finance.addMessage("Maaf, gagal terhubung ke backend AI.", true);
+      }
+    } catch (e) {
+      debugPrint("Error sending message to backend: $e");
+      await finance.addMessage("Terjadi kesalahan sistem saat menghubungi AI.", true);
+    } finally {
+      finance.setAiThinking(false);
+      _scrollChatToBottom();
+    }
   }
 
   // ============================================================
