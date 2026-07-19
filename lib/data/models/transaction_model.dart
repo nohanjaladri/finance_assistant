@@ -24,6 +24,40 @@ extension TransactionTypeExt on TransactionType {
   }
 }
 
+class TransactionItemModel {
+  final int? id;
+  final int transactionId;
+  final String note;
+  final int amount;
+  final int quantity;
+
+  const TransactionItemModel({
+    this.id,
+    required this.transactionId,
+    required this.note,
+    required this.amount,
+    required this.quantity,
+  });
+
+  factory TransactionItemModel.fromJson(Map<String, dynamic> json) {
+    return TransactionItemModel(
+      id: json['id'] as int?,
+      transactionId: json['transaction_id'] as int? ?? 0,
+      note: json['note'] as String? ?? '',
+      amount: json['amount'] as int? ?? 0,
+      quantity: json['quantity'] as int? ?? 1,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    if (id != null) 'id': id,
+    'transaction_id': transactionId,
+    'note': note,
+    'amount': amount,
+    'quantity': quantity,
+  };
+}
+
 class TransactionModel {
   final int? id;
   final String userId;
@@ -34,6 +68,7 @@ class TransactionModel {
   final String category;
   final PaymentMethod paymentMethod;
   final DateTime createdAt;
+  final List<TransactionItemModel> items;
 
   const TransactionModel({
     this.id,
@@ -45,6 +80,7 @@ class TransactionModel {
     required this.category,
     required this.paymentMethod,
     required this.createdAt,
+    this.items = const [],
   });
 
   /// Klasifikasi otomatis payment method berdasarkan kategori
@@ -61,6 +97,15 @@ class TransactionModel {
   }
 
   factory TransactionModel.fromJson(Map<String, dynamic> json) {
+    var itemsList = <TransactionItemModel>[];
+    if (json['transaction_items'] != null) {
+      try {
+        final list = json['transaction_items'] as List;
+        itemsList = list
+            .map((i) => TransactionItemModel.fromJson(i as Map<String, dynamic>))
+            .toList();
+      } catch (_) {}
+    }
     return TransactionModel(
       id: json['id'] as int?,
       userId: json['user_id'] as String? ?? '',
@@ -74,6 +119,7 @@ class TransactionModel {
       ),
       createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ??
           DateTime.now(),
+      items: itemsList,
     );
   }
 
@@ -87,6 +133,7 @@ class TransactionModel {
     'category': category,
     'payment_method': paymentMethod.value,
     'created_at': createdAt.toIso8601String(),
+    'transaction_items': items.map((i) => i.toJson()).toList(),
   };
 
   TransactionModel copyWith({
@@ -99,6 +146,7 @@ class TransactionModel {
     String? category,
     PaymentMethod? paymentMethod,
     DateTime? createdAt,
+    List<TransactionItemModel>? items,
   }) {
     return TransactionModel(
       id: id ?? this.id,
@@ -110,6 +158,8 @@ class TransactionModel {
       category: category ?? this.category,
       paymentMethod: paymentMethod ?? this.paymentMethod,
       createdAt: createdAt ?? this.createdAt,
+      items: items ?? this.items,
     );
   }
 }
+

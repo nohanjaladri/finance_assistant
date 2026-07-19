@@ -26,6 +26,10 @@ class BackendAiService {
   final String baseUrl = "https://finance-assistant-gilt.vercel.app";
 
   Future<BackendAiResponse?> sendMessage(String message, {String userId = "default_user"}) async {
+    debugPrint("=== AI PROCESS START ===");
+    debugPrint("[AI INPUT] User ID: $userId");
+    debugPrint("[AI INPUT] Message: \"$message\"");
+    debugPrint("[AI INPUT] API URL: $baseUrl/chat");
     try {
       final response = await _dio.post(
         "$baseUrl/chat",
@@ -35,12 +39,23 @@ class BackendAiService {
         },
       );
 
+      debugPrint("[AI HTTP STATUS] Status Code: ${response.statusCode}");
       if (response.statusCode == 200 && response.data != null) {
-        return BackendAiResponse.fromJson(response.data as Map<String, dynamic>);
+        debugPrint("[AI HTTP RESPONSE] Raw Data: ${response.data}");
+        final aiResponse = BackendAiResponse.fromJson(response.data as Map<String, dynamic>);
+        debugPrint("[AI OUTPUT] Reply: \"${aiResponse.reply}\"");
+        debugPrint("[AI OUTPUT] Intent: \"${aiResponse.intent}\"");
+        debugPrint("[AI OUTPUT] Extracted Data: ${aiResponse.extractedData}");
+        debugPrint("=== AI PROCESS END ===");
+        return aiResponse;
+      } else {
+        debugPrint("[AI HTTP RESPONSE] Failed status or empty data: ${response.data}");
       }
     } catch (e) {
-      debugPrint("BackendAiService error: $e");
+      debugPrint("=== AI PROCESS ERROR ===");
+      debugPrint("[AI ERROR] BackendAiService error: $e");
     }
+    debugPrint("=== AI PROCESS END (WITH NULL RESPONSE) ===");
     return null;
   }
 }

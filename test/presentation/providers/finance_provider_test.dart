@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:finance_assistant/presentation/providers/finance_provider.dart';
 import 'package:finance_assistant/data/services/supabase_service.dart';
 import 'package:finance_assistant/data/models/transaction_model.dart';
-import 'package:finance_assistant/data/models/pending_model.dart';
 import 'package:finance_assistant/data/models/room_model.dart';
 
 class MockSupabaseService extends Mock implements SupabaseService {}

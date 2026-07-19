@@ -164,7 +164,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         }
 
         // Refresh data from Supabase since the backend already inserted the transaction
-        if (response.intent == 'ADD_EXPENSE' || response.intent == 'ADD_INCOME') {
+        if (response.intent == 'ADD_EXPENSE' ||
+            response.intent == 'ADD_INCOME') {
           await finance.refreshAll();
         }
       } else {
@@ -172,7 +173,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       }
     } catch (e) {
       debugPrint("Error sending message to backend: $e");
-      await finance.addMessage("Terjadi kesalahan sistem saat menghubungi AI.", true);
+      await finance.addMessage(
+        "Terjadi kesalahan sistem saat menghubungi AI.",
+        true,
+      );
     } finally {
       finance.setAiThinking(false);
       _scrollChatToBottom();
@@ -999,8 +1003,18 @@ class _TransactionTabState extends State<_TransactionTab> {
         groupName = "Minggu Lalu";
       } else {
         final months = [
-          'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-          'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+          'Januari',
+          'Februari',
+          'Maret',
+          'April',
+          'Mei',
+          'Juni',
+          'Juli',
+          'Agustus',
+          'September',
+          'Oktober',
+          'November',
+          'Desember',
         ];
         groupName = "${months[txDate.month - 1]} ${txDate.year}";
       }
@@ -1340,8 +1354,12 @@ class _TransactionTabState extends State<_TransactionTab> {
       }
     }
 
-    for (var val in inData) if (val > maxY) maxY = val;
-    for (var val in outData) if (val > maxY) maxY = val;
+    for (var val in inData) {
+      if (val > maxY) maxY = val;
+    }
+    for (var val in outData) {
+      if (val > maxY) maxY = val;
+    }
 
     maxY = maxY > 0 ? maxY * 1.2 : 1000;
 
@@ -1545,22 +1563,38 @@ class _TransactionTabState extends State<_TransactionTab> {
                 children: [
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.arrow_downward_rounded, color: Colors.white70, size: 16),
+                          const Icon(
+                            Icons.arrow_downward_rounded,
+                            color: Colors.white70,
+                            size: 16,
+                          ),
                           const SizedBox(width: 8),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text("Masuk", style: TextStyle(color: Colors.white70, fontSize: 11)),
+                              const Text(
+                                "Masuk",
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                ),
+                              ),
                               TweenAnimationBuilder<double>(
                                 key: ValueKey<int>(_refreshKey),
-                                tween: Tween<double>(begin: 0, end: widget.totalIn.toDouble()),
+                                tween: Tween<double>(
+                                  begin: 0,
+                                  end: widget.totalIn.toDouble(),
+                                ),
                                 duration: const Duration(milliseconds: 1500),
                                 curve: Curves.easeOutQuart,
                                 builder: (context, value, child) {
@@ -1583,22 +1617,38 @@ class _TransactionTabState extends State<_TransactionTab> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.arrow_upward_rounded, color: Colors.white70, size: 16),
+                          const Icon(
+                            Icons.arrow_upward_rounded,
+                            color: Colors.white70,
+                            size: 16,
+                          ),
                           const SizedBox(width: 8),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text("Keluar", style: TextStyle(color: Colors.white70, fontSize: 11)),
+                              const Text(
+                                "Keluar",
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                ),
+                              ),
                               TweenAnimationBuilder<double>(
                                 key: ValueKey<int>(_refreshKey),
-                                tween: Tween<double>(begin: 0, end: widget.totalOut.toDouble()),
+                                tween: Tween<double>(
+                                  begin: 0,
+                                  end: widget.totalOut.toDouble(),
+                                ),
                                 duration: const Duration(milliseconds: 1500),
                                 curve: Curves.easeOutQuart,
                                 builder: (context, value, child) {
@@ -1677,7 +1727,9 @@ class _TransactionTabState extends State<_TransactionTab> {
             ],
           ),
           const SizedBox(height: 6),
-          ..._buildGroupedList(widget.transactions.take(20).toList()).map((item) {
+          ..._buildGroupedList(widget.transactions.take(20).toList()).map((
+            item,
+          ) {
             if (item is String) {
               return _buildHeader(item);
             } else {
@@ -1690,7 +1742,6 @@ class _TransactionTabState extends State<_TransactionTab> {
             }
           }),
         ],
-
       ],
     );
   }
@@ -1701,7 +1752,11 @@ class _TransactionTile extends StatelessWidget {
   final Color accentColor;
   final VoidCallback? onTap;
 
-  const _TransactionTile({required this.tx, required this.accentColor, this.onTap});
+  const _TransactionTile({
+    required this.tx,
+    required this.accentColor,
+    this.onTap,
+  });
 
   String _formatDate(DateTime dt) {
     final months = [
@@ -1755,7 +1810,9 @@ class _TransactionTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
-                  isIn ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded,
+                  isIn
+                      ? Icons.arrow_downward_rounded
+                      : Icons.arrow_upward_rounded,
                   color: isIn ? Colors.green : Colors.redAccent,
                   size: 20,
                 ),

@@ -95,7 +95,7 @@ class SupabaseService {
       var query = _client
           .schema(AppConfig.schema)
           .from('transactions')
-          .select()
+          .select('*, transaction_items(*)')
           .eq('user_id', currentUserId)
           .isFilter('room_id', null);
 
@@ -122,7 +122,7 @@ class SupabaseService {
       var query = _client
           .schema(AppConfig.schema)
           .from('transactions')
-          .select()
+          .select('*, transaction_items(*)')
           .eq('room_id', roomId);
 
       if (paymentMethod != null) {

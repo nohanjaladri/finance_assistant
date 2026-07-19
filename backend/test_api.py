@@ -8,7 +8,7 @@ def test_chat():
     url = "https://finance-assistant-gilt.vercel.app/chat"
     data = json.dumps({
       "message": "Saya beli bakso 15000",
-      "user_id": "00000000-0000-0000-0000-000000000000"
+      "user_id": "0c732da4-39e4-45f1-8a64-984d66baadf0"
     }).encode("utf-8")
     
     req = urllib.request.Request(

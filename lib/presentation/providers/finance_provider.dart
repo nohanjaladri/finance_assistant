@@ -393,7 +393,16 @@ class FinanceProvider extends ChangeNotifier {
     isSharingEnabled = prefs.getBool('sharing_enabled') ?? false;
     final savedRoomId = prefs.getString('active_room_id');
     if (savedRoomId != null && isSharingEnabled) {
-      // akan di-load saat initialize
+      final room = await _db.getMyRoom();
+      if (room != null && room.id == savedRoomId) {
+        activeRoom = room;
+        isSharingConnected = true;
+        
+        _db.listenToSharedTransactions(
+          roomId: room.id,
+          onUpdate: () => refreshAll(),
+        );
+      }
     }
   }
 

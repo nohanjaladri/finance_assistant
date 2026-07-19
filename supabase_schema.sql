@@ -81,6 +81,17 @@
   );
 
   -- ============================================
+  -- 4b. TABEL TRANSACTION ITEMS (Detail Item Transaksi)
+  -- ============================================
+  CREATE TABLE IF NOT EXISTS public.transaction_items (
+    id BIGSERIAL PRIMARY KEY,
+    transaction_id BIGINT NOT NULL REFERENCES public.transactions(id) ON DELETE CASCADE,
+    note TEXT NOT NULL,
+    amount INTEGER NOT NULL CHECK (amount >= 0),
+    quantity INTEGER NOT NULL DEFAULT 1
+  );
+
+  -- ============================================
   -- 5. TABEL PENDING REQUESTS
   -- ============================================
   CREATE TABLE IF NOT EXISTS public.pending_requests (
