@@ -126,7 +126,13 @@ async def simulate_analyst_agent(payload: AgentSimulationRequest):
                 SystemMessage(content=(
                     "Anda adalah Database Analyst Agent.\n"
                     "Tugas Anda HANYA menghasilkan query SQL SELECT PostgreSQL yang valid untuk tabel 'transactions' (t) dan 'transaction_items' (ti).\n"
+                    "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
                     "Gunakan parameter ':user_id' untuk memfilter kepemilikan data.\n"
+                    "PENTING: Untuk filter waktu/tanggal, gunakan PostgreSQL date functions berikut agar sangat akurat:\n"
+                    "  - Harian (hari ini): `created_at::date = CURRENT_DATE` atau group by `created_at::date`\n"
+                    "  - Mingguan (minggu ini): `created_at >= DATE_TRUNC('week', CURRENT_DATE)` atau group by `DATE_TRUNC('week', created_at)`\n"
+                    "  - Bulanan (bulan ini): `created_at >= DATE_TRUNC('month', CURRENT_DATE)` atau group by `DATE_TRUNC('month', created_at)`\n"
+                    "  - Pastikan filter pengeluaran menggunakan `type = 'OUT'` dan pemasukan menggunakan `type = 'IN'`.\n"
                     "Kembalikan HANYA query SELECT sql mentah di output, tanpa markdown, tanpa penjelasan."
                 )),
                 HumanMessage(content=payload.message)
