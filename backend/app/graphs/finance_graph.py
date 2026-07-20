@@ -12,12 +12,12 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 # Define Pydantic Schema for extraction
 class TransactionItemExtraction(BaseModel):
     note: str = Field(description="Nama barang atau catatan item spesifik. Contoh: 'bakso', 'es teh'.")
-    amount: int = Field(description="Nominal harga untuk item ini. Contoh: 15000.")
+    amount: Optional[int] = Field(default=0, description="Nominal harga untuk item ini. Contoh: 15000. Isikan 0 atau null jika tidak disebutkan.")
     quantity: int = Field(default=1, description="Jumlah item yang dibeli.")
 
 class TransactionExtraction(BaseModel):
     intent: str = Field(
-        description="Intent dari pengguna. Harus berupa 'ADD_EXPENSE', 'ADD_INCOME', 'UNDO', 'QUERY', atau 'GENERAL'."
+        description="Intent dari pengguna. Harus berupa 'ADD_EXPENSE', 'ADD_INCOME', 'UNDO', 'QUERY', 'APPEND_ITEM', 'MODIFY_LAST', atau 'GENERAL'."
     )
     category: Optional[str] = Field(
         description="Kategori transaksi secara umum. Pilih salah satu: 'Food', 'Groceries', 'Transport', 'Shopping', 'Salary', 'Other'."
@@ -40,6 +40,17 @@ class TransactionExtraction(BaseModel):
             "Gunakan parameter ':user_id' untuk memfilter data transaksi milik user terkait. "
             "Contoh: 'SELECT SUM(amount) FROM transactions WHERE user_id = :user_id AND type = \\'OUT\\' AND category = \\'Food\\''"
         )
+    )
+    confidence_score: float = Field(
+        description="Tingkat kepercayaan/keyakinan AI terhadap data yang diekstrak (nilai antara 0.0 hingga 1.0). "
+                    "Berikan nilai rendah (misal < 0.8) jika nominal uang tidak ada/tidak jelas, nama barang ambigu, atau intent tidak pasti."
+    )
+    is_ambiguous: bool = Field(
+        description="Set True jika ada informasi penting yang kurang, tidak jelas, atau membutuhkan konfirmasi/klarifikasi dari pengguna."
+    )
+    clarification_question: Optional[str] = Field(
+        default=None,
+        description="Pertanyaan ramah dalam bahasa Indonesia untuk meminta klarifikasi jika is_ambiguous bernilai True atau confidence_score rendah. Contoh: 'Berapa harga baksonya?' atau 'Apakah transaksi ini berupa pemasukan atau pengeluaran?'."
     )
 
 # Define State Structure
@@ -79,18 +90,25 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "- 'ADD_INCOME': untuk pencatatan pemasukan baru.\n"
                     "- 'UNDO': untuk membatalkan/menghapus transaksi terakhir yang baru saja dicatat.\n"
                     "- 'QUERY': untuk menanyakan/menganalisis riwayat transaksi keuangan mereka sendiri (misal: total belanja, pengeluaran kategori tertentu, list belanja terbesar, dll).\n"
+                    "- 'APPEND_ITEM': jika pengguna ingin menambahkan item baru ke transaksi belanjaan yang paling terakhir dicatat (misal: 'tambahkan es jeruk 5000', 'eh masukkan es teh 3000 juga ke belanjaan tadi').\n"
+                    "- 'MODIFY_LAST': jika pengguna ingin mengubah/merevisi detail transaksi terakhir yang baru saja diinput (misal: 'ganti harganya jadi 12000', 'harganya salah, harusnya 15000').\n"
                     "- 'GENERAL': untuk sapaan, pertanyaan umum non-finansial, atau percakapan biasa.\n\n"
                     "Aturan Memori Konteks:\n"
-                    "Jika pesan terakhir pengguna adalah kelanjutan transaksi (misal: 'sama es teh 5000' setelah membeli bakso),\n"
-                    "ubah intent-nya menjadi 'ADD_EXPENSE' atau 'ADD_INCOME' sesuai konteks terakhir, lalu ekstrak detail item tersebut.\n"
-                    "Jangan gabungkan dengan item lama, cukup kembalikan item yang baru disebutkan di pesan terakhir pengguna, tetapi pastikan context intent tetap terjaga.\n"
-                    "Jika pengguna mengetik kata seperti 'batal', 'cancel', atau 'undo', ubah intent menjadi 'UNDO'.\n\n"
+                    "- Jika pesan terakhir pengguna adalah kelanjutan transaksi (misal: 'sama es teh 5000' setelah membeli bakso),\n"
+                    "  pilih intent 'APPEND_ITEM' jika itu berupa tambahan item baru untuk transaksi terakhir, lalu ekstrak detail item tersebut.\n"
+                    "- Jika pesan terakhir bertujuan untuk merevisi nominal transaksi terakhir (misal: 'eh harganya salah, harusnya 15000'), pilih intent 'MODIFY_LAST' dan ekstrak nominal baru tersebut di bagian items.\n"
+                    "- Jika pengguna mengetik kata seperti 'batal', 'cancel', atau 'undo', ubah intent menjadi 'UNDO'.\n\n"
                     "Aturan QUERY:\n"
                     "Jika intent adalah 'QUERY', hasilkan query SQL SELECT PostgreSQL yang valid di bidang 'sql_query'.\n"
                     "Query HANYA boleh mengakses tabel 'transactions' (t) atau join 'transaction_items' (ti) jika menanyakan detail item.\n"
                     "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
                     "PENTING: Selalu masukkan filter `user_id = :user_id` di klausa WHERE agar data aman dan terisolasi.\n"
-                    "Contoh: jika user tanya 'berapa total belanja boba?', gunakan `SELECT SUM(t.amount) FROM transactions t JOIN transaction_items ti ON t.id = ti.transaction_id WHERE t.user_id = :user_id AND LOWER(ti.note) LIKE '%boba%'`"
+                    "Contoh: jika user tanya 'berapa total belanja boba?', gunakan `SELECT SUM(t.amount) FROM transactions t JOIN transaction_items ti ON t.id = ti.transaction_id WHERE t.user_id = :user_id AND LOWER(ti.note) LIKE '%boba%'`\n\n"
+                    "Aturan Keyakinan (Confidence Score) & Klarifikasi:\n"
+                    "- Nilai 'confidence_score' harus berkisar antara 0.0 (sangat tidak yakin) hingga 1.0 (sangat yakin).\n"
+                    "- Jika nominal transaksi (jumlah uang) atau nama item belanja tidak disebutkan secara eksplisit atau tidak jelas, berikan 'confidence_score' di bawah 0.8, set 'is_ambiguous' menjadi true, dan buat 'clarification_question' yang menanyakan info yang kurang secara spesifik.\n"
+                    "- Contoh: jika user mengetik 'saya beli roti', nominal harganya tidak ada. Berikan confidence_score = 0.5, is_ambiguous = true, dan clarification_question = 'Berapa harga roti yang Anda beli?'\n"
+                    "- Jika pesan berupa sapaan, percakapan umum, atau query yang sudah jelas maksudnya, berikan confidence_score = 1.0 dan is_ambiguous = false."
                 ))
             ]
             for msg in state["messages"]:
@@ -105,7 +123,7 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             for item in (extracted.items or []):
                 items_list.append({
                     "note": item.note,
-                    "amount": item.amount,
+                    "amount": item.amount if item.amount is not None else 0,
                     "quantity": item.quantity
                 })
             return {
@@ -115,7 +133,10 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "payment_method": extracted.payment_method or "tunai",
                     "type": extracted.type or ("OUT" if extracted.intent == "ADD_EXPENSE" else "IN"),
                     "items": items_list,
-                    "sql_query": extracted.sql_query
+                    "sql_query": extracted.sql_query,
+                    "confidence_score": extracted.confidence_score if extracted.confidence_score is not None else 1.0,
+                    "is_ambiguous": extracted.is_ambiguous if extracted.is_ambiguous is not None else False,
+                    "clarification_question": extracted.clarification_question
                 }
             }
         except Exception as e:
@@ -123,7 +144,15 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             
     # Rule-based fallback
     intent = "GENERAL"
-    extracted_data = {}
+    extracted_data = {
+        "category": "Other",
+        "payment_method": "tunai",
+        "type": "OUT",
+        "items": [],
+        "confidence_score": 1.0,
+        "is_ambiguous": False,
+        "clarification_question": None
+    }
     
     if "batal" in last_message.lower() or "undo" in last_message.lower() or "cancel" in last_message.lower():
         intent = "UNDO"
@@ -141,7 +170,10 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             "category": "Other",
             "payment_method": "tunai",
             "type": "OUT",
-            "items": [{"note": note, "amount": amount, "quantity": 1}]
+            "items": [{"note": note, "amount": amount, "quantity": 1}],
+            "confidence_score": 1.0 if amount > 0 else 0.5,
+            "is_ambiguous": False if amount > 0 else True,
+            "clarification_question": None if amount > 0 else "Berapa nominal belanja pengeluaran Anda?"
         }
     elif "terima" in last_message.lower() or "gaji" in last_message.lower():
         intent = "ADD_INCOME"
@@ -157,7 +189,10 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             "category": "Salary",
             "payment_method": "tunai",
             "type": "IN",
-            "items": [{"note": note, "amount": amount, "quantity": 1}]
+            "items": [{"note": note, "amount": amount, "quantity": 1}],
+            "confidence_score": 1.0 if amount > 0 else 0.5,
+            "is_ambiguous": False if amount > 0 else True,
+            "clarification_question": None if amount > 0 else "Berapa nominal pendapatan Anda?"
         }
         
     return {
@@ -173,6 +208,16 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     last_message = state["messages"][-1]["content"] if state["messages"] else ""
     
     if intent in ["ADD_EXPENSE", "ADD_INCOME"]:
+        confidence_score = extracted_data.get("confidence_score", 1.0)
+        is_ambiguous = extracted_data.get("is_ambiguous", False)
+        clarification_question = extracted_data.get("clarification_question")
+
+        # Check for ambiguity or low confidence
+        if is_ambiguous or confidence_score < 0.8:
+            confidence_pct = int(confidence_score * 100)
+            reply = clarification_question or "Maaf, informasi transaksi kurang lengkap. Bisa tolong sebutkan nominal uang dan detail barangnya secara jelas?"
+            return {"response": f"{reply} (Confidence: {confidence_pct}%)"}
+
         items_data = extracted_data.get("items") or []
         if not items_data:
             return {"response": "Maaf, saya tidak menemukan item transaksi dalam pesan Anda."}
@@ -214,6 +259,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             db.refresh(tx)
             
             items_str = ", ".join([f"{di.note} (x{di.quantity}): Rp {di.amount}" for di in tx.items])
+            confidence_pct = int(confidence_score * 100)
             if llm:
                 prompt = (
                     f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
@@ -221,12 +267,107 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa transaksinya sudah berhasil dicatat."
                 )
                 llm_response = llm.invoke(prompt)
-                response_msg = llm_response.content
+                response_msg = f"{llm_response.content} (Confidence: {confidence_pct}%)"
             else:
-                response_msg = f"Berhasil mencatat {tx_type.lower()} untuk detail: [{items_str}] dengan total Rp {tx.amount} ({tx.payment_method})."
+                response_msg = f"Berhasil mencatat {tx_type.lower()} untuk detail: [{items_str}] dengan total Rp {tx.amount} ({tx.payment_method}). (Confidence: {confidence_pct}%)"
         except Exception as e:
             db.rollback()
             response_msg = f"Gagal menyimpan transaksi ke database: {e}"
+        finally:
+            db.close()
+            
+    elif intent == "APPEND_ITEM":
+        items_data = extracted_data.get("items") or []
+        if not items_data:
+            return {"response": "Maaf, saya tidak menemukan item tambahan dalam pesan Anda."}
+            
+        db = SessionLocal()
+        try:
+            last_tx = db.query(Transaction)\
+                .filter(Transaction.user_id == user_id)\
+                .order_by(Transaction.created_at.desc())\
+                .first()
+            if not last_tx:
+                return {"response": "Tidak ditemukan transaksi sebelumnya untuk ditambahkan item."}
+                
+            total_added = 0
+            added_items_str_list = []
+            for item in items_data:
+                db_item = TransactionItem(
+                    transaction_id=last_tx.id,
+                    note=item.get("note") or "Item",
+                    amount=item.get("amount") or 0,
+                    quantity=item.get("quantity") or 1
+                )
+                db.add(db_item)
+                item_cost = db_item.amount * db_item.quantity
+                total_added += item_cost
+                added_items_str_list.append(f"{db_item.note} (x{db_item.quantity}): Rp {db_item.amount}")
+                
+            last_tx.amount += total_added
+            additional_notes = ", ".join(item.get("note") for item in items_data)
+            last_tx.note = f"{last_tx.note}, {additional_notes}"
+            
+            db.commit()
+            db.refresh(last_tx)
+            
+            added_items_str = ", ".join(added_items_str_list)
+            if llm:
+                prompt = (
+                    f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                    f"Aksi Database: Berhasil menambahkan item: [{added_items_str}] senilai total tambahan Rp {total_added} ke transaksi '{last_tx.note}' (ID: {last_tx.id}). Total nominal baru transaksi sekarang adalah Rp {last_tx.amount}.\n\n"
+                    f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa item belanjaan tambahan tersebut sudah berhasil ditambahkan ke transaksi terakhir mereka."
+                )
+                llm_response = llm.invoke(prompt)
+                response_msg = llm_response.content
+            else:
+                response_msg = f"Berhasil menambahkan [{added_items_str}] ke transaksi terakhir. Total transaksi sekarang: Rp {last_tx.amount}."
+        except Exception as e:
+            db.rollback()
+            response_msg = f"Gagal menambahkan item ke transaksi terakhir: {e}"
+        finally:
+            db.close()
+
+    elif intent == "MODIFY_LAST":
+        items_data = extracted_data.get("items") or []
+        db = SessionLocal()
+        try:
+            last_tx = db.query(Transaction)\
+                .filter(Transaction.user_id == user_id)\
+                .order_by(Transaction.created_at.desc())\
+                .first()
+            if not last_tx:
+                return {"response": "Tidak ditemukan transaksi sebelumnya untuk dimodifikasi."}
+                
+            if items_data:
+                new_amount = items_data[0].get("amount", 0)
+                if new_amount > 0:
+                    old_amount = last_tx.amount
+                    last_tx.amount = new_amount
+                    
+                    if last_tx.items:
+                        last_tx.items[0].amount = new_amount
+                        
+                    db.commit()
+                    db.refresh(last_tx)
+                    
+                    if llm:
+                        prompt = (
+                            f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                            f"Aksi Database: Berhasil merevisi nominal transaksi terakhir '{last_tx.note}' dari Rp {old_amount} menjadi Rp {new_amount}.\n\n"
+                            f"Tugas Anda: Beritahu pengguna dengan ramah dan alami dalam bahasa Indonesia bahwa perubahan nominal transaksi terakhir tersebut sudah berhasil disimpan."
+                        )
+                        llm_response = llm.invoke(prompt)
+                        response_msg = llm_response.content
+                    else:
+                        response_msg = f"Berhasil mengubah nominal transaksi terakhir menjadi Rp {new_amount}."
+                else:
+                    response_msg = "Maaf, nominal harga baru tidak valid atau tidak terbaca."
+            else:
+                response_msg = "Maaf, tidak menemukan informasi nominal revisi baru."
+        except Exception as e:
+            db.rollback()
+            response_msg = f"Gagal memodifikasi transaksi terakhir: {e}"
         finally:
             db.close()
             

@@ -61,9 +61,24 @@ async def chat_endpoint(payload: ChatRequest):
         }
         
         result = await finance_graph.ainvoke(initial_state)
+        reply_text = result.get("response") or "Gagal memproses pesan."
         
+        # Save user message and AI reply to DB for short-term history
+        db = SessionLocal()
+        try:
+            user_msg = ChatMessage(user_id=payload.user_id, text=payload.message, is_ai=False)
+            ai_msg = ChatMessage(user_id=payload.user_id, text=reply_text, is_ai=True)
+            db.add(user_msg)
+            db.add(ai_msg)
+            db.commit()
+        except Exception as save_err:
+            logging.error(f"Error saving chat history to DB: {save_err}")
+            db.rollback()
+        finally:
+            db.close()
+            
         return ChatResponse(
-            reply=result.get("response") or "Gagal memproses pesan.",
+            reply=reply_text,
             intent=result.get("intent") or "UNKNOWN",
             extracted_data=result.get("extracted_data") or {}
         )
