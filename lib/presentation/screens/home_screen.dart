@@ -20,7 +20,6 @@ import 'auth_screens.dart';
 import 'settings_profile_screens.dart';
 import 'transaction_history_screen.dart';
 import 'transaction_detail_screen.dart';
-import 'stt_test_screen.dart';
 import '../../core/utils/amount_parser.dart';
 
 // ============================================================
@@ -343,17 +342,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.science_rounded, color: Colors.white, size: 20),
-                    tooltip: "Test STT",
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const SttTestScreen()),
-                      );
-                    },
                   ),
                   const SizedBox(width: 8),
                   // Chat button
@@ -765,41 +753,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return GestureDetector(
       onTap: () async {
         if (voice.isListening) {
+          await voice.stopListening();
           setState(() {
-            _voicePreviewText = "Menerjemahkan suara...";
+            _voicePreviewText = null;
           });
-          await voice.stopListeningAndTranscribe(
+        } else {
+          await voice.startListening(
             onResult: (text, isFinal) {
-              if (isFinal) {
-                setState(() {
-                  _voicePreviewText = null;
-                });
-                if (text != "Gagal menerjemahkan suara." && text.trim().isNotEmpty) {
-                  _sendMessage(customText: text);
-                } else if (text == "Gagal menerjemahkan suara.") {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Gagal menerjemahkan rekaman suara."),
-                      backgroundColor: Colors.redAccent,
-                    ),
-                  );
-                }
-              } else {
+              if (text.isNotEmpty) {
                 setState(() {
                   _voicePreviewText = text;
                 });
                 _jumpChatToBottom();
               }
+              if (isFinal) {
+                setState(() {
+                  _voicePreviewText = null;
+                });
+                _sendMessage(customText: text);
+              }
             },
           );
-        } else {
-          await voice.startListening(
-            onResult: (text, isFinal) {},
-          );
-          setState(() {
-            _voicePreviewText = "Mendengarkan... Ketuk lagi untuk kirim";
-          });
-          _jumpChatToBottom();
         }
       },
       child: Container(

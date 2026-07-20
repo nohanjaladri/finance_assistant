@@ -1,76 +1,37 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:record/record.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'backend_ai_service.dart';
 
 class VoiceService with ChangeNotifier {
-  final AudioRecorder _recorder = AudioRecorder();
+  final SpeechToText _speech = SpeechToText();
   final FlutterTts _tts = FlutterTts();
   bool _isListening = false;
   bool get isListening => _isListening;
-  
-  String? _audioFilePath;
 
   Future<void> init() async {
+    await _speech.initialize();
     await _tts.setLanguage("id-ID");
   }
 
   Future<void> startListening({
     required Function(String, bool) onResult,
   }) async {
-    try {
-      final hasPermission = await _recorder.hasPermission();
-      if (!hasPermission) {
-        debugPrint('VoiceService: Microphone permission denied');
-        return;
-      }
-
-      _isListening = true;
-      notifyListeners();
-
-      final tempDir = Directory.systemTemp;
-      _audioFilePath = '${tempDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.m4a';
-      debugPrint('VoiceService: Starting recording to $_audioFilePath');
-      
-      await _recorder.start(
-        const RecordConfig(encoder: AudioEncoder.aacLc), 
-        path: _audioFilePath!,
-      );
-    } catch (e) {
-      debugPrint('VoiceService startListening exception: $e');
-      _isListening = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> stopListeningAndTranscribe({
-    required Function(String, bool) onResult,
-  }) async {
-    try {
-      debugPrint('VoiceService: Stopping recording...');
-      final path = await _recorder.stop();
-      _isListening = false;
-      notifyListeners();
-
-      if (path != null) {
-        onResult("Menerjemahkan suara...", false); // temporary status
-        final text = await BackendAiService().transcribeAudio(path);
-        if (text != null && text.trim().isNotEmpty) {
-          onResult(text, true);
-        } else {
-          onResult("Gagal menerjemahkan suara.", true);
+    _isListening = true;
+    notifyListeners();
+    await _speech.listen(
+      onResult: (result) {
+        onResult(result.recognizedWords, result.finalResult);
+        if (result.finalResult) {
+          _isListening = false;
+          notifyListeners();
         }
-      }
-    } catch (e) {
-      debugPrint('VoiceService stopListening exception: $e');
-      _isListening = false;
-      notifyListeners();
-    }
+      },
+      localeId: "id-ID",
+    );
   }
 
   Future<void> stopListening() async {
-    await _recorder.stop();
+    await _speech.stop();
     _isListening = false;
     notifyListeners();
   }
