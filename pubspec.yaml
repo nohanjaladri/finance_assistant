@@ -40,6 +40,7 @@ dependencies:
   shared_preferences: ^2.5.4     # Local key-value storage
   permission_handler: ^11.3.1    # Runtime permissions
   record: ^6.2.1
+  vosk_flutter: ^0.3.0
 
 dev_dependencies:
   flutter_test:
@@ -97,3 +98,8 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+dependency_overrides:
+  permission_handler: ^11.3.1
+  http: ^1.1.0
+
