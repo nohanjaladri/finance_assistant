@@ -8,11 +8,12 @@ class VoiceService with ChangeNotifier {
   bool _isListening = false;
   bool get isListening => _isListening;
   bool _isInitialized = false;
+  String _currentLocaleId = "id-ID";
 
   Future<void> init() async {
     try {
       _isInitialized = await _speech.initialize(
-        debugLogging: true, // Enable internal speech_to_text package debug logs
+        debugLogging: true,
         onError: (errorNotification) {
           debugPrint('SpeechToText onError: ${errorNotification.errorMsg} - permanent: ${errorNotification.permanent}');
           _isListening = false;
@@ -26,6 +27,15 @@ class VoiceService with ChangeNotifier {
           }
         },
       );
+      
+      if (_isInitialized) {
+        final systemLocale = await _speech.systemLocale();
+        if (systemLocale != null) {
+          _currentLocaleId = systemLocale.localeId;
+          debugPrint('SpeechToText system locale selected: $_currentLocaleId');
+        }
+      }
+      
       debugPrint('SpeechToText initialized successfully: $_isInitialized');
       await _tts.setLanguage("id-ID");
     } catch (e) {
@@ -54,9 +64,8 @@ class VoiceService with ChangeNotifier {
             notifyListeners();
           }
         },
-        localeId: "id-ID",
-        cancelOnError: false, // Do not cancel immediately on temporary errors
-        listenMode: ListenMode.confirmation, // Optimized for short commands/transactions
+        localeId: _currentLocaleId, // Use dynamically detected system locale
+        cancelOnError: false,
       );
     } catch (e) {
       debugPrint('SpeechToText listen exception: $e');
