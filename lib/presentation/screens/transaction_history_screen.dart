@@ -42,34 +42,60 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
 
   // Determine icons based on note/metadata
   Widget _buildLeftIcon(TransactionModel tx) {
-    final note = tx.note.toLowerCase();
     IconData iconData = Icons.receipt_long_rounded;
-    Color iconColor = const Color(0xFF108EE9); // DANA Blue
+    Color iconColor = const Color(0xFF108EE9);
 
-    if (note.contains('qris') || note.contains('scan')) {
-      iconData = Icons.qr_code_scanner_rounded;
-      iconColor = Colors.purple;
-    } else if (note.contains('kirim') || note.contains('transfer') || note.contains('tf')) {
-      iconData = Icons.send_rounded;
-      iconColor = const Color(0xFF108EE9);
-    } else if (note.contains('isi saldo') || note.contains('topup') || note.contains('top up') || tx.type == TransactionType.income) {
-      iconData = Icons.add_circle_outline_rounded;
-      iconColor = Colors.green;
-    } else if (note.contains('wallet') || note.contains('dana') || note.contains('gopay') || note.contains('ovo')) {
-      iconData = Icons.account_balance_wallet_rounded;
-      iconColor = Colors.orange;
+    final isIn = tx.type == TransactionType.income;
+    switch (tx.category.toLowerCase()) {
+      case 'food':
+        iconData = Icons.restaurant_rounded;
+        iconColor = const Color(0xFFFF9F0A);
+        break;
+      case 'groceries':
+        iconData = Icons.shopping_basket_rounded;
+        iconColor = const Color(0xFF30D158);
+        break;
+      case 'transport':
+        iconData = Icons.directions_car_rounded;
+        iconColor = const Color(0xFF5E5CE6);
+        break;
+      case 'shopping':
+        iconData = Icons.shopping_bag_rounded;
+        iconColor = const Color(0xFFBF5AF2);
+        break;
+      case 'salary':
+        iconData = Icons.payments_rounded;
+        iconColor = const Color(0xFF34C759);
+        break;
+      case 'bills':
+      case 'utilities':
+        iconData = Icons.receipt_long_rounded;
+        iconColor = const Color(0xFFFF453A);
+        break;
+      case 'transfer_in':
+      case 'transfer_out':
+        iconData = Icons.swap_horiz_rounded;
+        iconColor = const Color(0xFF64D2FF);
+        break;
+      case 'entertainment':
+        iconData = Icons.movie_filter_rounded;
+        iconColor = const Color(0xFFFF375F);
+        break;
+      default:
+        iconData = isIn ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded;
+        iconColor = isIn ? const Color(0xFF34C759) : const Color(0xFFFF453A);
     }
 
     return Container(
       width: 48,
       height: 48,
       decoration: BoxDecoration(
-        color: const Color(0xFFF5F9FC),
+        color: iconColor.withOpacity(0.08),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5ECF2), width: 1),
+        border: Border.all(color: iconColor.withOpacity(0.15), width: 1),
       ),
       child: Center(
-        child: Icon(iconData, color: iconColor, size: 24),
+        child: Icon(iconData, color: iconColor, size: 22),
       ),
     );
   }

@@ -1859,6 +1859,56 @@ class _TransactionTile extends StatelessWidget {
     this.onTap,
   });
 
+  IconData _getCategoryIcon(String category, bool isIn) {
+    switch (category.toLowerCase()) {
+      case 'food':
+        return Icons.restaurant_rounded;
+      case 'groceries':
+        return Icons.shopping_basket_rounded;
+      case 'transport':
+        return Icons.directions_car_rounded;
+      case 'shopping':
+        return Icons.shopping_bag_rounded;
+      case 'salary':
+        return Icons.payments_rounded;
+      case 'bills':
+      case 'utilities':
+        return Icons.receipt_long_rounded;
+      case 'transfer_in':
+      case 'transfer_out':
+        return Icons.swap_horiz_rounded;
+      case 'entertainment':
+        return Icons.movie_filter_rounded;
+      default:
+        return isIn ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded;
+    }
+  }
+
+  Color _getCategoryColor(String category, bool isIn) {
+    switch (category.toLowerCase()) {
+      case 'food':
+        return const Color(0xFFFF9F0A); // Apple Orange
+      case 'groceries':
+        return const Color(0xFF30D158); // Apple Green
+      case 'transport':
+        return const Color(0xFF5E5CE6); // Apple Indigo
+      case 'shopping':
+        return const Color(0xFFBF5AF2); // Apple Purple
+      case 'salary':
+        return const Color(0xFF34C759); // Apple Money Green
+      case 'bills':
+      case 'utilities':
+        return const Color(0xFFFF453A); // Apple Red
+      case 'transfer_in':
+      case 'transfer_out':
+        return const Color(0xFF64D2FF); // Apple Sky Blue
+      case 'entertainment':
+        return const Color(0xFFFF375F); // Apple Pink
+      default:
+        return isIn ? const Color(0xFF34C759) : const Color(0xFFFF453A);
+    }
+  }
+
   String _formatDate(DateTime dt) {
     final months = [
       'Jan',
@@ -1881,6 +1931,8 @@ class _TransactionTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final isIn = tx.type == TransactionType.income;
     final amt = tx.amount;
+    final iconColor = _getCategoryColor(tx.category, isIn);
+    final iconData = _getCategoryIcon(tx.category, isIn);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -1907,14 +1959,12 @@ class _TransactionTile extends StatelessWidget {
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: (isIn ? Colors.green : Colors.red).withOpacity(0.1),
+                  color: iconColor.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
-                  isIn
-                      ? Icons.arrow_downward_rounded
-                      : Icons.arrow_upward_rounded,
-                  color: isIn ? Colors.green : Colors.redAccent,
+                  iconData,
+                  color: iconColor,
                   size: 20,
                 ),
               ),
