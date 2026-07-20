@@ -252,8 +252,11 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         if not normalized_sql.startswith("SELECT"):
             return {"response": "Akses ditolak: Hanya query SELECT membaca data yang diizinkan."}
             
+        # Clean function calls like EXTRACT(... FROM ...) to avoid false positive table matches
+        check_query = re.sub(r'\b\w+\s*\([^)]*?FROM[^)]*?\)', '', sql_query, flags=re.IGNORECASE)
+            
         allowed_tables = ["transactions", "transaction_items"]
-        table_matches = re.findall(r'\bFROM\s+([\w\.]+)\b|\bJOIN\s+([\w\.]+)\b', sql_query, re.IGNORECASE)
+        table_matches = re.findall(r'\bFROM\s+([\w\.]+)\b|\bJOIN\s+([\w\.]+)\b', check_query, re.IGNORECASE)
         for match in table_matches:
             raw_table = (match[0] or match[1] or '').lower()
             if '.' in raw_table:
