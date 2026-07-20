@@ -10,7 +10,7 @@ import '../providers/finance_provider.dart';
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
-  static const _primaryColor = Color(0xFF5E5CE6);
+  static const _primaryColor = Color(0xFF108EE9);
 
   @override
   Widget build(BuildContext context) {

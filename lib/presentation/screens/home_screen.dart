@@ -268,7 +268,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF5E5CE6), Color(0xFF8C52FF)],
+          colors: [Color(0xFF108EE9), Color(0xFF1A9EF2)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -1100,8 +1100,8 @@ class _TransactionTabState extends State<_TransactionTab> {
   Widget _buildHeader(String title) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-      margin: const EdgeInsets.only(top: 14, bottom: 6),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      margin: const EdgeInsets.only(top: 8),
       child: Text(
         title.toUpperCase(),
         style: const TextStyle(
@@ -1797,27 +1797,59 @@ class _TransactionTabState extends State<_TransactionTab> {
             ],
           ),
           const SizedBox(height: 6),
-          ..._buildGroupedList(widget.transactions.take(5).toList()).map((
-            item,
-          ) {
-            if (item is String) {
-              return _buildHeader(item);
-            } else {
-              final tx = item as TransactionModel;
-              return _TransactionTile(
-                tx: tx,
-                accentColor: widget.color,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => TransactionDetailScreen(transaction: tx),
-                    ),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.02),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: _buildGroupedList(widget.transactions.take(5).toList()).asMap().entries.map((entry) {
+                final index = entry.key;
+                final item = entry.value;
+                final list = _buildGroupedList(widget.transactions.take(5).toList());
+                
+                if (item is String) {
+                  return _buildHeader(item);
+                } else {
+                  final tx = item as TransactionModel;
+                  final tile = _TransactionTile(
+                    tx: tx,
+                    accentColor: widget.color,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => TransactionDetailScreen(transaction: tx),
+                        ),
+                      );
+                    },
                   );
-                },
-              );
-            }
-          }),
+                  
+                  if (index < list.length - 1) {
+                    return Column(
+                      children: [
+                        tile,
+                        const Divider(
+                          indent: 74,
+                          height: 1,
+                          color: Color(0xFFF2F4F7),
+                        ),
+                      ],
+                    );
+                  }
+                  return tile;
+                }
+              }).toList(),
+            ),
+          ),
           const SizedBox(height: 12),
           TextButton(
             onPressed: () {
@@ -1920,7 +1952,7 @@ class _TransactionTile extends StatelessWidget {
       'Jul',
       'Ags',
       'Sep',
-      'Okt',
+                                      'Okt',
       'Nov',
       'Des',
     ];
@@ -1934,100 +1966,112 @@ class _TransactionTile extends StatelessWidget {
     final iconColor = _getCategoryColor(tx.category, isIn);
     final iconData = _getCategoryIcon(tx.category, isIn);
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.03),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              // Icon
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  iconData,
-                  color: iconColor,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              // Info
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      tx.note,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                        color: Color(0xFF1E1E2C),
-                      ),
-                      overflow: TextOverflow.ellipsis,
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            // Icon Stack with Payment Method Badge
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: iconColor.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: iconColor.withOpacity(0.15), width: 1),
+                  ),
+                  child: Center(
+                    child: Icon(
+                      iconData,
+                      color: iconColor,
+                      size: 20,
                     ),
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: accentColor.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            tx.category,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: accentColor,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                  ),
+                ),
+                Positioned(
+                  bottom: -2,
+                  right: -2,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      tx.paymentMethod == PaymentMethod.tunai
+                          ? Icons.money_rounded
+                          : Icons.credit_card_rounded,
+                      size: 10,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(width: 14),
+            // Info
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    tx.note,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: Colors.black87,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          _formatDate(tx.createdAt.toLocal()),
+                        decoration: BoxDecoration(
+                          color: accentColor.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          tx.category,
                           style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey.shade400,
+                            fontSize: 10,
+                            color: accentColor,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                      ],
-                    ),
-                  ],
-                ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _formatDate(tx.createdAt.toLocal()),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              // Amount
-              Text(
-                "${isIn ? '+' : '-'} Rp ${_formatAmt(amt)}",
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  color: isIn ? Colors.green.shade700 : Colors.red.shade700,
-                ),
+            ),
+            const SizedBox(width: 8),
+            // Amount
+            Text(
+              "${isIn ? '+' : '-'}Rp ${_formatAmt(amt)}",
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+                color: isIn ? Colors.green.shade700 : Colors.black87,
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
