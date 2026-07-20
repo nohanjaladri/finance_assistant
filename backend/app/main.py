@@ -6,10 +6,13 @@ from app.database.session import engine, Base, SessionLocal
 from app.models.models import Transaction, ChatMessage
 from app.graphs.finance_graph import finance_graph
 
+from app.agents_endpoints import router as agents_router
+
 # Initialize Database tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Personal Finance Assistant")
+app.include_router(agents_router)
 
 class ChatRequest(BaseModel):
     message: str
@@ -19,6 +22,7 @@ class ChatResponse(BaseModel):
     reply: str
     intent: str
     extracted_data: dict
+    logs: List[str] = []
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(payload: ChatRequest):
@@ -80,7 +84,8 @@ async def chat_endpoint(payload: ChatRequest):
         return ChatResponse(
             reply=reply_text,
             intent=result.get("intent") or "UNKNOWN",
-            extracted_data=result.get("extracted_data") or {}
+            extracted_data=result.get("extracted_data") or {},
+            logs=result.get("logs") or []
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

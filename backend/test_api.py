@@ -25,7 +25,7 @@ def test_chat():
             print("API Response:", json.dumps(res_json, indent=2))
             assert "bakso" in res_json["reply"] or "pengeluaran" in res_json["reply"]
             assert res_json["intent"] == "ADD_EXPENSE"
-            assert res_json["extracted_data"]["amount"] == 15000
+            assert res_json["extracted_data"]["items"][0]["amount"] == 15000
             print("[OK] API Assertion Passed!")
     except Exception as e:
       print("[ERROR] API Request Failed:", e)

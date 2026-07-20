@@ -291,6 +291,7 @@ class FinanceProvider extends ChangeNotifier {
     Map<String, dynamic>? receiptData,
     Map<String, dynamic>? queryResult,
     String? vizType,
+    List<String>? logs,
   }) async {
     debugPrint('FinanceProvider.addMessage: text=$text, isAi=$isAi, activeChatType=$_activeChatType');
     
@@ -314,6 +315,7 @@ class FinanceProvider extends ChangeNotifier {
       'receipt_data': receiptData,
       'query_result': queryResult,
       'viz_type': vizType,
+      'logs': logs,
       'created_at': DateTime.now().toIso8601String(),
     };
 
