@@ -164,6 +164,7 @@
   ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
   ALTER TABLE public.pending_requests ENABLE ROW LEVEL SECURITY;
   ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE public.transaction_items ENABLE ROW LEVEL SECURITY;
 
   -- PROFILES: user hanya bisa lihat & edit profil sendiri
   DROP POLICY IF EXISTS profiles_self_access ON public.profiles;
@@ -235,6 +236,53 @@
     FOR SELECT USING (
       room_id IS NOT NULL AND
       public.is_room_member(room_id, auth.uid())
+    );
+
+  -- TRANSACTION ITEMS RLS POLICIES
+  DROP POLICY IF EXISTS transaction_items_select ON public.transaction_items;
+  CREATE POLICY transaction_items_select ON public.transaction_items
+    FOR SELECT USING (
+      EXISTS (
+        SELECT 1 FROM public.transactions
+        WHERE transactions.id = transaction_items.transaction_id
+          AND (
+            transactions.user_id = auth.uid()
+            OR (
+              transactions.room_id IS NOT NULL 
+              AND public.is_room_member(transactions.room_id, auth.uid())
+            )
+          )
+      )
+    );
+
+  DROP POLICY IF EXISTS transaction_items_insert ON public.transaction_items;
+  CREATE POLICY transaction_items_insert ON public.transaction_items
+    FOR INSERT WITH CHECK (
+      EXISTS (
+        SELECT 1 FROM public.transactions
+        WHERE transactions.id = transaction_items.transaction_id
+          AND transactions.user_id = auth.uid()
+      )
+    );
+
+  DROP POLICY IF EXISTS transaction_items_update ON public.transaction_items;
+  CREATE POLICY transaction_items_update ON public.transaction_items
+    FOR UPDATE USING (
+      EXISTS (
+        SELECT 1 FROM public.transactions
+        WHERE transactions.id = transaction_items.transaction_id
+          AND transactions.user_id = auth.uid()
+      )
+    );
+
+  DROP POLICY IF EXISTS transaction_items_delete ON public.transaction_items;
+  CREATE POLICY transaction_items_delete ON public.transaction_items
+    FOR DELETE USING (
+      EXISTS (
+        SELECT 1 FROM public.transactions
+        WHERE transactions.id = transaction_items.transaction_id
+          AND transactions.user_id = auth.uid()
+      )
     );
 
   -- ============================================
