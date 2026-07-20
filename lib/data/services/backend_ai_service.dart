@@ -26,9 +26,7 @@ class BackendAiResponse {
 
 class BackendAiService {
   final Dio _dio = Dio();
-  final String baseUrl = kDebugMode 
-      ? (defaultTargetPlatform == TargetPlatform.android ? "http://10.0.2.2:8000" : "http://localhost:8000")
-      : "https://finance-assistant-gilt.vercel.app";
+  final String baseUrl = "https://finance-assistant-gilt.vercel.app";
 
   Future<BackendAiResponse?> sendMessage(String message, {String userId = "default_user"}) async {
     debugPrint("=== AI PROCESS START ===");
