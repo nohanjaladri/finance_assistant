@@ -20,6 +20,7 @@ import 'auth_screens.dart';
 import 'settings_profile_screens.dart';
 import 'transaction_history_screen.dart';
 import 'transaction_detail_screen.dart';
+import 'stt_test_screen.dart';
 import '../../core/utils/amount_parser.dart';
 
 // ============================================================
@@ -342,6 +343,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         ),
                       ],
                     ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.science_rounded, color: Colors.white, size: 20),
+                    tooltip: "Test STT",
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const SttTestScreen()),
+                      );
+                    },
                   ),
                   const SizedBox(width: 8),
                   // Chat button
