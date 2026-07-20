@@ -235,6 +235,46 @@ class FinanceProvider extends ChangeNotifier {
     return ok;
   }
 
+  Future<bool> updateTransactionItemManual({
+    required int transactionId,
+    required int itemId,
+    required String note,
+    required int amount,
+    required int quantity,
+  }) async {
+    final okItem = await _db.updateTransactionItem(
+      itemId,
+      note: note,
+      amount: amount,
+      quantity: quantity,
+    );
+    if (!okItem) return false;
+
+    final txIndex = allTransactions.indexWhere((t) => t.id == transactionId);
+    if (txIndex != -1) {
+      final tx = allTransactions[txIndex];
+      final updatedItems = tx.items.map((item) {
+        if (item.id == itemId) {
+          return item.copyWith(note: note, amount: amount, quantity: quantity);
+        }
+        return item;
+      }).toList();
+
+      final newTotal = updatedItems.fold<int>(0, (sum, it) => sum + (it.amount * it.quantity));
+      final newNoteSummary = updatedItems.map((it) => "${it.note} (x${it.quantity})").join(", ");
+
+      await _db.updateTransaction(
+        transactionId,
+        amount: newTotal,
+        note: newNoteSummary,
+      );
+    }
+    
+    await refreshAll();
+    return true;
+  }
+
+
   Future<bool> deleteTransaction(int id) async {
     final ok = await _db.deleteTransaction(id);
     if (ok) await refreshAll();

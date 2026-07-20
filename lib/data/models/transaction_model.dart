@@ -56,7 +56,24 @@ class TransactionItemModel {
     'amount': amount,
     'quantity': quantity,
   };
+
+  TransactionItemModel copyWith({
+    int? id,
+    int? transactionId,
+    String? note,
+    int? amount,
+    int? quantity,
+  }) {
+    return TransactionItemModel(
+      id: id ?? this.id,
+      transactionId: transactionId ?? this.transactionId,
+      note: note ?? this.note,
+      amount: amount ?? this.amount,
+      quantity: quantity ?? this.quantity,
+    );
+  }
 }
+
 
 class TransactionModel {
   final int? id;

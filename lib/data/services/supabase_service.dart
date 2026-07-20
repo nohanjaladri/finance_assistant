@@ -200,6 +200,30 @@ class SupabaseService {
     }
   }
 
+  Future<bool> updateTransactionItem(
+    int itemId, {
+    required String note,
+    required int amount,
+    required int quantity,
+  }) async {
+    try {
+      await _client
+          .schema(AppConfig.schema)
+          .from('transaction_items')
+          .update({
+            'note': note,
+            'amount': amount,
+            'quantity': quantity,
+          })
+          .eq('id', itemId);
+      return true;
+    } catch (e) {
+      debugPrint('updateTransactionItem error: $e');
+      return false;
+    }
+  }
+
+
   Future<bool> deleteTransaction(int id) async {
     try {
       await _client

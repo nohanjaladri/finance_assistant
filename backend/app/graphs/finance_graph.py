@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import TypedDict, List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from langchain_groq import ChatGroq
@@ -16,7 +17,7 @@ class TransactionItemExtraction(BaseModel):
 
 class TransactionExtraction(BaseModel):
     intent: str = Field(
-        description="Intent dari pengguna. Harus berupa 'ADD_EXPENSE', 'ADD_INCOME', 'UNDO', atau 'GENERAL'."
+        description="Intent dari pengguna. Harus berupa 'ADD_EXPENSE', 'ADD_INCOME', 'UNDO', 'QUERY', atau 'GENERAL'."
     )
     category: Optional[str] = Field(
         description="Kategori transaksi secara umum. Pilih salah satu: 'Food', 'Groceries', 'Transport', 'Shopping', 'Salary', 'Other'."
@@ -30,6 +31,15 @@ class TransactionExtraction(BaseModel):
     items: List[TransactionItemExtraction] = Field(
         default=[],
         description="Daftar item detail dalam transaksi ini."
+    )
+    sql_query: Optional[str] = Field(
+        default=None,
+        description=(
+            "Query SQL SELECT PostgreSQL yang valid untuk menjawab pertanyaan pengguna jika intent-nya adalah 'QUERY'. "
+            "Hanya diizinkan men-query tabel 'transactions' (beserta join 'transaction_items' jika menanyakan detail item). "
+            "Gunakan parameter ':user_id' untuk memfilter data transaksi milik user terkait. "
+            "Contoh: 'SELECT SUM(amount) FROM transactions WHERE user_id = :user_id AND type = \\'OUT\\' AND category = \\'Food\\''"
+        )
     )
 
 # Define State Structure
@@ -62,18 +72,25 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             chat_history = [
                 SystemMessage(content=(
                     "Anda adalah asisten keuangan pribadi cerdas bernama Dompetku AI.\n"
-                    "Tugas Anda adalah mendeteksi intent pengguna dan mengekstrak informasi detail item transaksi.\n"
+                    "Tugas Anda adalah mendeteksi intent pengguna dan mengekstrak informasi detail item transaksi atau menghasilkan query database.\n"
                     "Pahami konteks percakapan sebelumnya untuk kalimat rujukan atau kalimat lanjutan (follow-up) dari pengguna.\n"
                     "PILIHAN INTENT:\n"
                     "- 'ADD_EXPENSE': untuk pencatatan pengeluaran baru.\n"
                     "- 'ADD_INCOME': untuk pencatatan pemasukan baru.\n"
                     "- 'UNDO': untuk membatalkan/menghapus transaksi terakhir yang baru saja dicatat.\n"
-                    "- 'GENERAL': untuk sapaan, pertanyaan umum, atau percakapan biasa.\n\n"
+                    "- 'QUERY': untuk menanyakan/menganalisis riwayat transaksi keuangan mereka sendiri (misal: total belanja, pengeluaran kategori tertentu, list belanja terbesar, dll).\n"
+                    "- 'GENERAL': untuk sapaan, pertanyaan umum non-finansial, atau percakapan biasa.\n\n"
                     "Aturan Memori Konteks:\n"
                     "Jika pesan terakhir pengguna adalah kelanjutan transaksi (misal: 'sama es teh 5000' setelah membeli bakso),\n"
                     "ubah intent-nya menjadi 'ADD_EXPENSE' atau 'ADD_INCOME' sesuai konteks terakhir, lalu ekstrak detail item tersebut.\n"
                     "Jangan gabungkan dengan item lama, cukup kembalikan item yang baru disebutkan di pesan terakhir pengguna, tetapi pastikan context intent tetap terjaga.\n"
-                    "Jika pengguna mengetik kata seperti 'batal', 'cancel', atau 'undo', ubah intent menjadi 'UNDO'."
+                    "Jika pengguna mengetik kata seperti 'batal', 'cancel', atau 'undo', ubah intent menjadi 'UNDO'.\n\n"
+                    "Aturan QUERY:\n"
+                    "Jika intent adalah 'QUERY', hasilkan query SQL SELECT PostgreSQL yang valid di bidang 'sql_query'.\n"
+                    "Query HANYA boleh mengakses tabel 'transactions' (t) atau join 'transaction_items' (ti) jika menanyakan detail item.\n"
+                    "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
+                    "PENTING: Selalu masukkan filter `user_id = :user_id` di klausa WHERE agar data aman dan terisolasi.\n"
+                    "Contoh: jika user tanya 'berapa total belanja boba?', gunakan `SELECT SUM(t.amount) FROM transactions t JOIN transaction_items ti ON t.id = ti.transaction_id WHERE t.user_id = :user_id AND LOWER(ti.note) LIKE '%boba%'`"
                 ))
             ]
             for msg in state["messages"]:
@@ -97,7 +114,8 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "category": extracted.category or "Other",
                     "payment_method": extracted.payment_method or "tunai",
                     "type": extracted.type or ("OUT" if extracted.intent == "ADD_EXPENSE" else "IN"),
-                    "items": items_list
+                    "items": items_list,
+                    "sql_query": extracted.sql_query
                 }
             }
         except Exception as e:
@@ -152,6 +170,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     intent = state.get("intent")
     extracted_data = state.get("extracted_data") or {}
     user_id = state.get("user_id", "default_user")
+    last_message = state["messages"][-1]["content"] if state["messages"] else ""
     
     if intent in ["ADD_EXPENSE", "ADD_INCOME"]:
         items_data = extracted_data.get("items") or []
@@ -221,6 +240,60 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         except Exception as e:
             db.rollback()
             response_msg = f"Gagal membatalkan transaksi: {e}"
+        finally:
+            db.close()
+            
+    elif intent == "QUERY":
+        sql_query = extracted_data.get("sql_query")
+        if not sql_query:
+            return {"response": "Maaf, saya tidak dapat memahami query untuk pertanyaan Anda."}
+            
+        normalized_sql = sql_query.strip().upper()
+        if not normalized_sql.startswith("SELECT"):
+            return {"response": "Akses ditolak: Hanya query SELECT membaca data yang diizinkan."}
+            
+        allowed_tables = ["transactions", "transaction_items"]
+        table_matches = re.findall(r'\bFROM\s+([\w\.]+)\b|\bJOIN\s+([\w\.]+)\b', sql_query, re.IGNORECASE)
+        for match in table_matches:
+            raw_table = (match[0] or match[1] or '').lower()
+            if '.' in raw_table:
+                raw_table = raw_table.split('.')[-1]
+            if raw_table and raw_table not in allowed_tables:
+                return {"response": f"Akses ditolak: Tidak diizinkan mengakses tabel '{raw_table}'."}
+                
+        blocked_keywords = ["DELETE", "DROP", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE", "REPLACE"]
+        for blocked in blocked_keywords:
+            if re.search(r'\b' + blocked + r'\b', normalized_sql):
+                return {"response": f"Akses ditolak: Query mengandung perintah terlarang '{blocked}'."}
+                
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            result = db.execute(text(sql_query), {"user_id": user_id})
+            rows = result.fetchall()
+            columns = result.keys()
+            
+            formatted_results = []
+            for row in rows:
+                formatted_results.append(dict(zip(columns, row)))
+                
+            if not formatted_results:
+                response_msg = "Tidak ditemukan data transaksi yang sesuai dengan pertanyaan Anda."
+            else:
+                if llm:
+                    prompt = (
+                        f"Pertanyaan Pengguna: '{last_message}'\n"
+                        f"Data Database Hasil Query: {formatted_results}\n\n"
+                        f"Tugas Anda: Jawab pertanyaan pengguna secara ringkas, ramah, dan alami dalam bahasa Indonesia berdasarkan data di atas. "
+                        f"Format nominal uang dengan format Rp (Rupiah) jika ada."
+                    )
+                    llm_response = llm.invoke(prompt)
+                    response_msg = llm_response.content
+                else:
+                    response_msg = f"Hasil analisis data: {formatted_results}"
+        except Exception as e:
+            logging.error(f"Error executing database query: {e}")
+            response_msg = f"Gagal mengambil data dari database: {e}"
         finally:
             db.close()
     else:

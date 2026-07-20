@@ -1,614 +1,75 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import '../providers/finance_provider.dart';
-import '../../core/utils/amount_parser.dart';
 import '../../data/models/transaction_model.dart';
+import 'transaction_detail_screen.dart';
 
-class TransactionHistoryScreen extends StatelessWidget {
+class TransactionHistoryScreen extends StatefulWidget {
   const TransactionHistoryScreen({super.key});
 
+  @override
+  State<TransactionHistoryScreen> createState() => _TransactionHistoryScreenState();
+}
+
+class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
+  String _searchQuery = "";
+  String? _selectedMonth; // format: "MMMM yyyy" e.g., "Mei 2026"
+  final TextEditingController _searchController = TextEditingController();
+
   String _formatRupiah(int amount) {
-    final str = amount.abs().toString();
-    final buf = StringBuffer();
-    for (int i = 0; i < str.length; i++) {
-      if (i > 0 && (str.length - i) % 3 == 0) buf.write('.');
-      buf.write(str[i]);
-    }
-    return buf.toString();
+    return NumberFormat.currency(
+      locale: 'id_ID',
+      symbol: 'Rp',
+      decimalDigits: 0,
+    ).format(amount);
   }
 
-  String _formatTimeOnly(String isoDate) {
-    if (isoDate.isEmpty) return "";
-    try {
-      final date = DateTime.parse(isoDate).toLocal();
-      final hh = date.hour.toString().padLeft(2, '0');
-      final mm = date.minute.toString().padLeft(2, '0');
-      return "$hh:$mm";
-    } catch (_) {
-      return "";
-    }
+  // Get month name in Indonesian
+  String _getMonthName(DateTime date) {
+    return DateFormat('MMMM', 'id_ID').format(date);
   }
 
-  IconData _getCategoryIcon(String category, String note) {
-    final text = note.toLowerCase();
-
-    if (text.contains('gojek') ||
-        text.contains('grab') ||
-        text.contains('ojek') ||
-        text.contains('parkir') ||
-        text.contains('bensin') ||
-        text.contains('maxim') ||
-        text.contains('tol')) {
-      return Icons.two_wheeler;
-    }
-    if (text.contains('listrik') ||
-        text.contains('pln') ||
-        text.contains('token') ||
-        text.contains('air') ||
-        text.contains('wifi') ||
-        text.contains('internet') ||
-        text.contains('indihome')) {
-      return Icons.receipt;
-    }
-    if (text.contains('dana') ||
-        text.contains('gopay') ||
-        text.contains('ovo') ||
-        text.contains('shopeepay') ||
-        text.contains('topup') ||
-        text.contains('top up')) {
-      return Icons.account_balance_wallet;
-    }
-    if (text.contains('sayur') ||
-        text.contains('buah') ||
-        text.contains('beras') ||
-        text.contains('pasar') ||
-        text.contains('indomaret') ||
-        text.contains('alfamart')) {
-      return Icons.local_grocery_store;
-    }
-    if (text.contains('makan') ||
-        text.contains('minum') ||
-        text.contains('kopi') ||
-        text.contains('bakso') ||
-        text.contains('ayam') ||
-        text.contains('warteg')) {
-      return Icons.restaurant;
-    }
-    if (text.contains('gaji') ||
-        text.contains('bonus') ||
-        text.contains('thr') ||
-        text.contains('upah')) {
-      return Icons.payments;
-    }
-    if (text.contains('pulsa') ||
-        text.contains('kuota') ||
-        text.contains('paket') ||
-        text.contains('axis') ||
-        text.contains('telkomsel')) {
-      return Icons.phone_android;
-    }
-    if (text.contains('transfer') ||
-        text.contains('tf') ||
-        text.contains('kirim') ||
-        text.contains('terima')) {
-      return Icons.swap_horiz;
-    }
-    if (text.contains('qris') || text.contains('scan')) return Icons.qr_code_2;
-    if (text.contains('obat') ||
-        text.contains('rs') ||
-        text.contains('dokter') ||
-        text.contains('apotek') ||
-        text.contains('klinik')) {
-      return Icons.medical_services;
-    }
-
-    switch (category) {
-      case 'Food':
-        return Icons.restaurant;
-      case 'Groceries':
-        return Icons.local_grocery_store;
-      case 'Transport':
-        return Icons.two_wheeler;
-      case 'Shopping':
-        return Icons.shopping_bag;
-      case 'Health':
-        return Icons.medical_services;
-      case 'Entertainment':
-        return Icons.sports_esports;
-      case 'Bills':
-        return Icons.receipt;
-      case 'EWallet':
-        return Icons.account_balance_wallet;
-      case 'Education':
-        return Icons.school;
-      case 'Charity':
-        return Icons.volunteer_activism;
-      case 'Investment':
-        return Icons.trending_up;
-      case 'Salary':
-        return Icons.payments;
-      case 'Business':
-        return Icons.store;
-      case 'Transfer_In':
-        return Icons.south_west;
-      case 'Transfer_Out':
-        return Icons.north_east;
-      default:
-        return Icons.receipt_long;
-    }
+  String _getMonthYear(DateTime date) {
+    return DateFormat('MMMM yyyy', 'id_ID').format(date);
   }
 
-  List<dynamic> _buildGroupedList(List<TransactionModel> transactions) {
-    List<dynamic> grouped = [];
-    String currentGroup = "";
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-
-    for (var tx in transactions) {
-      final txDate = tx.createdAt.toLocal();
-      final justTx = DateTime(txDate.year, txDate.month, txDate.day);
-      final diff = today.difference(justTx).inDays;
-
-      String groupName = "";
-      if (diff == 0) {
-        groupName = "Hari Ini";
-      } else if (diff == 1) {
-        groupName = "Kemarin";
-      } else if (diff > 1 && diff <= 7) {
-        groupName = "Minggu Ini";
-      } else if (diff > 7 && diff <= 14) {
-        groupName = "Minggu Lalu";
-      } else {
-        final months = [
-          'Januari',
-          'Februari',
-          'Maret',
-          'April',
-          'Mei',
-          'Juni',
-          'Juli',
-          'Agustus',
-          'September',
-          'Oktober',
-          'November',
-          'Desember',
-        ];
-        groupName = "${months[txDate.month - 1]} ${txDate.year}";
-      }
-
-      if (groupName != currentGroup) {
-        grouped.add(groupName);
-        currentGroup = groupName;
-      }
-      grouped.add(tx);
-    }
-    return grouped;
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
-  Widget _buildHeader(String title) {
+  // Determine icons based on note/metadata
+  Widget _buildLeftIcon(TransactionModel tx) {
+    final note = tx.note.toLowerCase();
+    IconData iconData = Icons.receipt_long_rounded;
+    Color iconColor = const Color(0xFF108EE9); // DANA Blue
+
+    if (note.contains('qris') || note.contains('scan')) {
+      iconData = Icons.qr_code_scanner_rounded;
+      iconColor = Colors.purple;
+    } else if (note.contains('kirim') || note.contains('transfer') || note.contains('tf')) {
+      iconData = Icons.send_rounded;
+      iconColor = const Color(0xFF108EE9);
+    } else if (note.contains('isi saldo') || note.contains('topup') || note.contains('top up') || tx.type == TransactionType.income) {
+      iconData = Icons.add_circle_outline_rounded;
+      iconColor = Colors.green;
+    } else if (note.contains('wallet') || note.contains('dana') || note.contains('gopay') || note.contains('ovo')) {
+      iconData = Icons.account_balance_wallet_rounded;
+      iconColor = Colors.orange;
+    }
+
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 24),
-      margin: const EdgeInsets.only(top: 10, bottom: 10),
+      width: 48,
+      height: 48,
       decoration: BoxDecoration(
-        color: const Color(0xFFF4F6FC),
-        border: Border(
-          bottom: BorderSide(color: Colors.grey.shade200, width: 1),
-        ),
+        color: const Color(0xFFF5F9FC),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5ECF2), width: 1),
       ),
-      child: Text(
-        title.toUpperCase(),
-        style: const TextStyle(
-          fontWeight: FontWeight.w800,
-          color: Color(0xFFA0A5BA),
-          fontSize: 12,
-          letterSpacing: 1.2,
-        ),
-      ),
-    );
-  }
-
-  // ==========================================
-  // FITUR MANUAL UPDATE & DELETE (MODAL)
-  // ==========================================
-  void _showActionModal(BuildContext context, TransactionModel item) {
-    final finance = context.read<FinanceProvider>();
-    final int id = item.id ?? -1;
-    if (id == -1) return;
-    final String currentNote = item.note;
-    final int currentAmount = item.amount;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) {
-        return Container(
-          padding: const EdgeInsets.only(
-            bottom: 30,
-            top: 12,
-            left: 24,
-            right: 24,
-          ),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(30),
-              topRight: Radius.circular(30),
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              const SizedBox(height: 24),
-              if (item.items.isNotEmpty) ...[
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    "Detail Rincian Item",
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF1E1E2C),
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF4F6FC),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    children: item.items.map((it) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                "${it.note} (x${it.quantity})",
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.black87,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              "Rp ${_formatRupiah(it.amount * it.quantity)}",
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                color: Colors.black87,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Divider(),
-                const SizedBox(height: 8),
-              ],
-              const Text(
-                "Opsi Transaksi",
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF1E1E2C),
-                  fontSize: 18,
-                ),
-              ),
-              const SizedBox(height: 24),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF5E5CE6).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.edit_rounded,
-                    color: Color(0xFF5E5CE6),
-                  ),
-                ),
-                title: const Text(
-                  "Edit Transaksi",
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _showEditDialog(
-                    context,
-                    finance,
-                    id,
-                    currentNote,
-                    currentAmount,
-                  );
-                },
-              ),
-              const Divider(),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFF647C).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.delete_rounded,
-                    color: Color(0xFFFF647C),
-                  ),
-                ),
-                title: const Text(
-                  "Hapus Permanen",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFFFF647C),
-                  ),
-                ),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _showDeleteConfirmDialog(context, finance, id, currentNote);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _showDeleteConfirmDialog(
-    BuildContext context,
-    FinanceProvider finance,
-    int id,
-    String note,
-  ) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text(
-          "Hapus Transaksi?",
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
-        content: Text(
-          "Apakah Anda yakin ingin menghapus '$note' secara permanen?",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              "Batal",
-              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w700),
-            ),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF647C),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              elevation: 0,
-            ),
-            onPressed: () {
-              finance.deleteTransactionManual(id);
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("Transaksi dihapus"),
-                  backgroundColor: Color(0xFFFF647C),
-                ),
-              );
-            },
-            child: const Text(
-              "Hapus",
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showEditDialog(
-    BuildContext context,
-    FinanceProvider finance,
-    int id,
-    String oldNote,
-    int oldAmount,
-  ) {
-    final noteCtrl = TextEditingController(text: oldNote);
-    final amountCtrl = TextEditingController(text: oldAmount.toString());
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text(
-          "Edit Transaksi",
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: noteCtrl,
-              decoration: InputDecoration(
-                labelText: "Nama Transaksi",
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: amountCtrl,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: "Nominal (Rp)",
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              "Batal",
-              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w700),
-            ),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF5E5CE6),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              elevation: 0,
-            ),
-            onPressed: () {
-              final newNote = noteCtrl.text.trim();
-              final newAmt =
-                  int.tryParse(
-                    AmountParser.cleanNumberString(amountCtrl.text),
-                  ) ??
-                  0;
-              if (newNote.isNotEmpty && newAmt > 0) {
-                finance.updateTransactionManual(id, newAmt, newNote);
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Data diperbarui"),
-                    backgroundColor: Color(0xFF00C48C),
-                  ),
-                );
-              }
-            },
-            child: const Text(
-              "Simpan",
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-  // ==========================================
-
-  Widget _buildTransactionTile(BuildContext context, TransactionModel item) {
-    final isIn = item.type == TransactionType.income;
-    final amountColor = isIn
-        ? const Color(0xFF00C48C)
-        : const Color(0xFFFF647C);
-    final amountPrefix = isIn ? "Rp" : "-Rp";
-    final arrowIcon = isIn ? Icons.arrow_upward : Icons.arrow_downward;
-    final note = item.note;
-    final category = item.category;
-    final amount = item.amount;
-
-    return InkWell(
-      onTap: () => _showActionModal(context, item),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey.shade200, width: 1.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.02),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Icon(
-                _getCategoryIcon(category, note),
-                color: const Color(0xFF1E1E2C),
-                size: 24,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    note,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
-                      color: Color(0xFF1E1E2C),
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatTimeOnly(item.createdAt.toIso8601String()),
-                    style: const TextStyle(
-                      color: Color(0xFFA0A5BA),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  "$amountPrefix${_formatRupiah(amount)}",
-                  style: TextStyle(
-                    color: amountColor,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: amountColor.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Icon(arrowIcon, color: amountColor, size: 12),
-                ),
-              ],
-            ),
-          ],
-        ),
+      child: Center(
+        child: Icon(iconData, color: iconColor, size: 24),
       ),
     );
   }
@@ -616,51 +77,300 @@ class TransactionHistoryScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
-    final transactions = finance.history;
-    final groupedItems = _buildGroupedList(transactions);
+    final allTxs = finance.allTransactions;
+
+    // 1. Filter based on Search Query
+    var filteredTxs = allTxs.where((tx) {
+      final matchesSearch = tx.note.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          tx.category.toLowerCase().contains(_searchQuery.toLowerCase());
+      return matchesSearch;
+    }).toList();
+
+    // 2. Extract available months for filter tabs (e.g. Maret, April, Mei, Juni)
+    final allMonths = allTxs.map((tx) => _getMonthYear(tx.createdAt)).toSet().toList();
+    // Sort months descending
+    allMonths.sort((a, b) {
+      try {
+        final dateA = DateFormat('MMMM yyyy', 'id_ID').parse(a);
+        final dateB = DateFormat('MMMM yyyy', 'id_ID').parse(b);
+        return dateB.compareTo(dateA);
+      } catch (_) {
+        return 0;
+      }
+    });
+
+    // 3. Filter based on Selected Month Tab
+    if (_selectedMonth != null) {
+      filteredTxs = filteredTxs.where((tx) => _getMonthYear(tx.createdAt) == _selectedMonth).toList();
+    }
+
+    // 4. Group remaining transactions by Month Year
+    final Map<String, List<TransactionModel>> groupedTxs = {};
+    for (final tx in filteredTxs) {
+      final key = _getMonthYear(tx.createdAt);
+      groupedTxs.putIfAbsent(key, () => []).add(tx);
+    }
 
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        centerTitle: true,
-        title: const Text(
-          "Aktivitas Histori",
-          style: TextStyle(
-            color: Color(0xFF1E1E2C),
-            fontWeight: FontWeight.w800,
-            fontSize: 18,
-          ),
-        ),
-        iconTheme: const IconThemeData(color: Color(0xFF1E1E2C)),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: Colors.grey.shade100, height: 1),
-        ),
-      ),
-      body: groupedItems.isEmpty
-          ? const Center(
-              child: Text(
-                "Belum ada transaksi merekam.",
-                style: TextStyle(color: Colors.grey),
+      body: Column(
+        children: [
+          // DANA Style Blue Header
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF108EE9), Color(0xFF1A9EF2)],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
               ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.only(bottom: 40),
-              itemCount: groupedItems.length,
-              itemBuilder: (context, index) {
-                final item = groupedItems[index];
-                if (item is String) {
-                  return _buildHeader(item);
-                } else {
-                  return _buildTransactionTile(
-                    context,
-                    item as TransactionModel,
-                  );
-                }
-              },
             ),
+            child: SafeArea(
+              bottom: false,
+              child: Column(
+                children: [
+                  // App Bar Title
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            GestureDetector(
+                              onTap: () => Navigator.pop(context),
+                              child: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+                            ),
+                            const SizedBox(width: 16),
+                            const Text(
+                              "Aktivitas",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Statement/Export icon
+                        const Icon(Icons.file_upload_outlined, color: Colors.white, size: 24),
+                      ],
+                    ),
+                  ),
+
+                  // Search Bar "Cari DANA"
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Container(
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: TextField(
+                        controller: _searchController,
+                        onChanged: (val) {
+                          setState(() => _searchQuery = val);
+                        },
+                        decoration: const InputDecoration(
+                          hintText: "Cari transaksi...",
+                          hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
+                          prefixIcon: Icon(Icons.search, color: Color(0xFF108EE9)),
+                          suffixIcon: Icon(Icons.tune_rounded, color: Colors.grey),
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // Month Filter Tab Row
+                  if (allMonths.isNotEmpty)
+                    Container(
+                      height: 48,
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: ListView.builder(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        itemCount: allMonths.length + 1,
+                        itemBuilder: (context, index) {
+                          final isAll = index == 0;
+                          final monthLabel = isAll ? "Semua" : allMonths[index - 1].split(' ').first;
+                          final monthValue = isAll ? null : allMonths[index - 1];
+                          final isSelected = _selectedMonth == monthValue;
+
+                          return GestureDetector(
+                            onTap: () {
+                              setState(() => _selectedMonth = monthValue);
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.only(right: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: isSelected ? Colors.white.withOpacity(0.2) : Colors.transparent,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  monthLabel,
+                                  style: TextStyle(
+                                    color: isSelected ? Colors.white : Colors.white70,
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+
+          // Transaction List
+          Expanded(
+            child: filteredTxs.isEmpty
+                ? const Center(
+                    child: Text(
+                      "Tidak ada transaksi ditemukan",
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: EdgeInsets.zero,
+                    itemCount: groupedTxs.keys.length,
+                    itemBuilder: (context, groupIndex) {
+                      final monthKey = groupedTxs.keys.elementAt(groupIndex);
+                      final txList = groupedTxs[monthKey]!;
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Month Header (e.g. Mei 2026) with Statement link
+                          Padding(
+                            padding: const EdgeInsets.only(left: 16, right: 16, top: 16, bottom: 8),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  monthKey,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                GestureDetector(
+                                  onTap: () {},
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        "Statement",
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.blue.shade700,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Icon(Icons.arrow_circle_right_rounded, size: 16, color: Colors.blue.shade700),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          // Transactions inside this month group
+                          ListView.separated(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            padding: EdgeInsets.zero,
+                            itemCount: txList.length,
+                            separatorBuilder: (_, __) => const Divider(
+                              indent: 80,
+                              height: 1,
+                              color: Color(0xFFF2F4F7),
+                            ),
+                            itemBuilder: (context, index) {
+                              final tx = txList[index];
+                              final isIncome = tx.type == TransactionType.income;
+                              final sign = isIncome ? "" : "-";
+                              final amountStr = "$sign${_formatRupiah(tx.amount)}";
+                              final dateSub = "${tx.createdAt.day} ${_getMonthName(tx.createdAt)} ${tx.createdAt.year} • ${DateFormat('HH:mm').format(tx.createdAt)}";
+
+                              return ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                leading: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    _buildLeftIcon(tx),
+                                    // Tiny payment method badge bottom-right
+                                    Positioned(
+                                      bottom: -2,
+                                      right: -2,
+                                      child: Container(
+                                        padding: const EdgeInsets.all(2),
+                                        decoration: const BoxDecoration(
+                                          color: Colors.white,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Icon(
+                                          tx.paymentMethod == PaymentMethod.tunai
+                                              ? Icons.money_rounded
+                                              : Icons.credit_card_rounded,
+                                          size: 12,
+                                          color: const Color(0xFF108EE9),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                title: Text(
+                                  tx.note,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                subtitle: Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    dateSub,
+                                    style: const TextStyle(color: Colors.grey, fontSize: 11),
+                                  ),
+                                ),
+                                trailing: Text(
+                                  amountStr,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 14,
+                                    color: isIncome ? Colors.green : Colors.black87,
+                                  ),
+                                ),
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => TransactionDetailScreen(transaction: tx),
+                                    ),
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

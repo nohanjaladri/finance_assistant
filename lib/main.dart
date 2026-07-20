@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 import 'data/services/voice_service.dart';
 import 'presentation/providers/finance_provider.dart';
@@ -14,6 +15,7 @@ import 'presentation/screens/auth_screens.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('id_ID', null);
 
   // Load environment variables
   await dotenv.load(fileName: ".env");

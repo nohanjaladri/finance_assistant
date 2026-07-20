@@ -19,6 +19,7 @@ import '../widgets/receipt_card.dart';
 import 'auth_screens.dart';
 import 'settings_profile_screens.dart';
 import 'transaction_history_screen.dart';
+import 'transaction_detail_screen.dart';
 import '../../core/utils/amount_parser.dart';
 
 // ============================================================
@@ -1727,7 +1728,7 @@ class _TransactionTabState extends State<_TransactionTab> {
             ],
           ),
           const SizedBox(height: 6),
-          ..._buildGroupedList(widget.transactions.take(20).toList()).map((
+          ..._buildGroupedList(widget.transactions.take(5).toList()).map((
             item,
           ) {
             if (item is String) {
@@ -1737,10 +1738,41 @@ class _TransactionTabState extends State<_TransactionTab> {
               return _TransactionTile(
                 tx: tx,
                 accentColor: widget.color,
-                onTap: () => _showActionModal(context, tx),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => TransactionDetailScreen(transaction: tx),
+                    ),
+                  );
+                },
               );
             }
           }),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const TransactionHistoryScreen()),
+              );
+            },
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  "Lihat Riwayat Lainnya",
+                  style: TextStyle(
+                    color: widget.color,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(Icons.arrow_forward_ios_rounded, size: 14, color: widget.color),
+              ],
+            ),
+          ),
         ],
       ],
     );
