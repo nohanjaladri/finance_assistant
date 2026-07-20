@@ -43,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final ScrollController _chatScrollController = ScrollController();
   bool _showScrollToBottom = false;
   DateTime? _lastBackPressed;
+  String? _voicePreviewText;
 
   // Scaffold drawer key
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -139,10 +140,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // ============================================================
   // SEND MESSAGE
   // ============================================================
-  Future<void> _sendMessage() async {
-    final text = _textController.text.trim();
+  Future<void> _sendMessage({String? customText}) async {
+    final text = (customText ?? _textController.text).trim();
     if (text.isEmpty) return;
-    _textController.clear();
+    if (customText == null) {
+      _textController.clear();
+    }
 
     final finance = context.read<FinanceProvider>();
     final voice = context.read<VoiceService>();
@@ -640,14 +643,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           horizontal: 16,
                           vertical: 8,
                         ),
-                        itemCount:
-                            finance.chatHistory.length +
+                        itemCount: finance.chatHistory.length +
+                            (_voicePreviewText != null ? 1 : 0) +
                             (finance.isAiThinking ? 1 : 0),
                         itemBuilder: (_, i) {
-                          if (i == finance.chatHistory.length) {
-                            return const _ThinkingBubble();
+                          if (i < finance.chatHistory.length) {
+                            return _buildMessageBubble(finance.chatHistory[i]);
                           }
-                          return _buildMessageBubble(finance.chatHistory[i]);
+                          final offsetIndex = i - finance.chatHistory.length;
+                          if (_voicePreviewText != null && offsetIndex == 0) {
+                            return _buildPreviewBubble(_voicePreviewText!);
+                          }
+                          return const _ThinkingBubble();
                         },
                       ),
                     ),
@@ -739,12 +746,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       onTap: () async {
         if (voice.isListening) {
           await voice.stopListening();
+          setState(() {
+            _voicePreviewText = null;
+          });
         } else {
           await voice.startListening(
             onResult: (text, isFinal) {
-              _textController.text = text;
+              if (text.isNotEmpty) {
+                setState(() {
+                  _voicePreviewText = text;
+                });
+                _scrollChatToBottom();
+              }
               if (isFinal) {
-                _sendMessage();
+                setState(() {
+                  _voicePreviewText = null;
+                });
+                _sendMessage(customText: text);
               }
             },
           );
@@ -765,6 +783,47 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       ),
     );
   }
+
+  Widget _buildPreviewBubble(String text) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF5E5CE6).withOpacity(0.6),
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(18),
+            topRight: Radius.circular(18),
+            bottomLeft: Radius.circular(18),
+            bottomRight: Radius.circular(4),
+          ),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.mic_none_rounded, color: Colors.white70, size: 16),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                text,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontStyle: FontStyle.italic,
+                  height: 1.4,
+                ),
+               ),
+             ),
+           ],
+         ),
+       ),
+     );
+   }
 
   Widget _buildMessageBubble(Map<String, dynamic> msg) {
     final isAi = msg['is_ai'] as bool? ?? (msg['isAi'] == 1);
