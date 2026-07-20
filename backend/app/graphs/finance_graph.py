@@ -214,7 +214,16 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             db.refresh(tx)
             
             items_str = ", ".join([f"{di.note} (x{di.quantity}): Rp {di.amount}" for di in tx.items])
-            response_msg = f"Berhasil mencatat {tx_type.lower()} untuk detail: [{items_str}] dengan total Rp {tx.amount} ({tx.payment_method}) ke database dengan ID Transaksi: {tx.id}."
+            if llm:
+                prompt = (
+                    f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                    f"Aksi Database: Berhasil mencatat transaksi {tx_type.lower()} (pemasukan/pengeluaran) senilai Rp {tx.amount} dengan metode pembayaran {tx.payment_method}. Detail item: {items_str}.\n\n"
+                    f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa transaksinya sudah berhasil dicatat."
+                )
+                llm_response = llm.invoke(prompt)
+                response_msg = llm_response.content
+            else:
+                response_msg = f"Berhasil mencatat {tx_type.lower()} untuk detail: [{items_str}] dengan total Rp {tx.amount} ({tx.payment_method})."
         except Exception as e:
             db.rollback()
             response_msg = f"Gagal menyimpan transaksi ke database: {e}"
@@ -235,8 +244,24 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 db.delete(last_tx)
                 db.commit()
                 response_msg = f"Berhasil membatalkan (menghapus) transaksi {type_to_del} terakhir untuk '{note_to_del}' sebesar Rp {amount_to_del}."
+                if llm:
+                    prompt = (
+                        f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                        f"Aksi Database: Berhasil membatalkan/menghapus transaksi {type_to_del} terakhir untuk '{note_to_del}' sebesar Rp {amount_to_del}.\n\n"
+                        f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa transaksi tersebut sudah berhasil dibatalkan."
+                    )
+                    llm_response = llm.invoke(prompt)
+                    response_msg = llm_response.content
             else:
                 response_msg = "Tidak ditemukan transaksi terakhir untuk dibatalkan."
+                if llm:
+                    prompt = (
+                        f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                        f"Aksi Database: Tidak ada transaksi terakhir yang ditemukan untuk dibatalkan.\n\n"
+                        f"Tugas Anda: Beritahu pengguna secara ramah dan sopan dalam bahasa Indonesia bahwa tidak ada transaksi terakhir yang ditemukan untuk dibatalkan."
+                    )
+                    llm_response = llm.invoke(prompt)
+                    response_msg = llm_response.content
         except Exception as e:
             db.rollback()
             response_msg = f"Gagal membatalkan transaksi: {e}"
@@ -301,6 +326,14 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             db.close()
     else:
         response_msg = "Halo! Ada yang bisa saya bantu dengan keuangan Anda?"
+        if llm:
+            prompt = (
+                f"Pesan Pengguna: '{last_message}'\n\n"
+                f"Tugas Anda: Jawab pesan pengguna secara alami, ramah, santai, dan ringkas dalam bahasa Indonesia untuk membantunya mengelola keuangan. "
+                f"Jika pesan pengguna tidak jelas nominal transaksinya, ingatkan mereka secara sopan untuk memberikan nominal agar bisa dicatat."
+            )
+            llm_response = llm.invoke(prompt)
+            response_msg = llm_response.content
         
     return {"response": response_msg}
 
