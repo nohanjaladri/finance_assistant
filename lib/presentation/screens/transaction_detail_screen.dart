@@ -20,6 +20,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
 
   final List<TextEditingController> _itemNoteControllers = [];
   final List<TextEditingController> _itemAmountControllers = [];
+  final List<TextEditingController> _itemQtyControllers = [];
   
   // Track dynamically computed total
   int _liveTotal = 0;
@@ -33,12 +34,15 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
     for (final item in widget.transaction.items) {
       final noteCtrl = TextEditingController(text: item.note);
       final amountCtrl = TextEditingController(text: item.amount.toString());
+      final qtyCtrl = TextEditingController(text: item.quantity.toString());
       
-      // Update live total when any amount changes
+      // Update live total when any amount or quantity changes
       amountCtrl.addListener(_recalculateTotal);
+      qtyCtrl.addListener(_recalculateTotal);
 
       _itemNoteControllers.add(noteCtrl);
       _itemAmountControllers.add(amountCtrl);
+      _itemQtyControllers.add(qtyCtrl);
     }
     _recalculateTotal();
   }
@@ -46,9 +50,10 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
   void _recalculateTotal() {
     int total = 0;
     if (_itemAmountControllers.isNotEmpty) {
-      for (final ctrl in _itemAmountControllers) {
-        final val = int.tryParse(ctrl.text) ?? 0;
-        total += val;
+      for (int i = 0; i < _itemAmountControllers.length; i++) {
+        final price = int.tryParse(_itemAmountControllers[i].text) ?? 0;
+        final qty = int.tryParse(_itemQtyControllers[i].text) ?? 1;
+        total += (price * qty);
       }
     } else {
       total = widget.transaction.amount;
@@ -65,6 +70,10 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
       c.dispose();
     }
     for (final c in _itemAmountControllers) {
+      c.removeListener(_recalculateTotal);
+      c.dispose();
+    }
+    for (final c in _itemQtyControllers) {
       c.removeListener(_recalculateTotal);
       c.dispose();
     }
@@ -90,13 +99,14 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
           final item = widget.transaction.items[i];
           final newNote = _itemNoteControllers[i].text.trim();
           final newAmount = int.tryParse(_itemAmountControllers[i].text) ?? item.amount;
+          final newQty = int.tryParse(_itemQtyControllers[i].text) ?? item.quantity;
 
           await finance.updateTransactionItemManual(
             transactionId: widget.transaction.id!,
             itemId: item.id!,
             note: newNote,
             amount: newAmount,
-            quantity: item.quantity, // Preserve existing quantity
+            quantity: newQty,
           );
         }
       }
@@ -105,7 +115,11 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
       final ok = await finance.updateTransaction(
         widget.transaction.id!,
         note: widget.transaction.items.isNotEmpty 
-            ? _itemNoteControllers.map((c) => c.text.trim()).join(", ")
+            ? _itemNoteControllers.asMap().entries.map((e) {
+                final noteText = e.value.text.trim();
+                final qtyText = _itemQtyControllers[e.key].text.trim();
+                return "$noteText (x$qtyText)";
+              }).join(", ")
             : _noteController.text.trim(),
         paymentMethod: _paymentMethod,
         amount: _liveTotal,
@@ -295,7 +309,7 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Sleek Invoice-Style Items List
+            // Spreadsheet-style aligned Table Editor
             if (widget.transaction.items.isNotEmpty) ...[
               const Text(
                 "RINCIAN ITEM BELANJA",
@@ -310,81 +324,102 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
-                      // Header Row
-                      const Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      // Perfect Spreadsheet Table
+                      Table(
+                        columnWidths: const {
+                          0: FlexColumnWidth(4), // Nama
+                          1: FlexColumnWidth(1.5), // Qty
+                          2: FlexColumnWidth(2.5), // Harga
+                        },
+                        defaultVerticalAlignment: TableCellVerticalAlignment.middle,
                         children: [
-                          Expanded(
-                            flex: 3,
-                            child: Text(
-                              "Nama Item",
-                              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 12),
-                            ),
+                          // Table Header
+                          const TableRow(
+                            children: [
+                              Padding(
+                                padding: EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  "Nama",
+                                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 13),
+                                ),
+                              ),
+                              Padding(
+                                padding: EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  "qty",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 13),
+                                ),
+                              ),
+                              Padding(
+                                padding: EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  "harga",
+                                  textAlign: TextAlign.right,
+                                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 13),
+                                ),
+                              ),
+                            ],
                           ),
-                          Expanded(
-                            flex: 2,
-                            child: Text(
-                              "Harga (Rp)",
-                              textAlign: TextAlign.right,
-                              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 12),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      const Divider(),
-                      
-                      // List of Editable Items
-                      ListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: widget.transaction.items.length,
-                        itemBuilder: (ctx, index) {
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Row(
+                          
+                          // Table Rows representing editable inputs
+                          ...List.generate(widget.transaction.items.length, (index) {
+                            return TableRow(
                               children: [
-                                // Editable Name Field
-                                Expanded(
-                                  flex: 3,
+                                // Nama Item Field
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
                                   child: TextField(
                                     controller: _itemNoteControllers[index],
                                     decoration: const InputDecoration(
                                       isDense: true,
-                                      hintText: "Nama item",
+                                      contentPadding: EdgeInsets.symmetric(vertical: 6),
                                       border: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFE5ECF2))),
                                       focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF5E5CE6))),
                                     ),
                                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                                   ),
                                 ),
-                                const SizedBox(width: 16),
                                 
-                                // Editable Price Field (Pre-filled and right aligned)
-                                Expanded(
-                                  flex: 2,
+                                // Qty Field
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                                  child: TextField(
+                                    controller: _itemQtyControllers[index],
+                                    keyboardType: TextInputType.number,
+                                    textAlign: TextAlign.center,
+                                    decoration: const InputDecoration(
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.symmetric(vertical: 6),
+                                      border: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFE5ECF2))),
+                                      focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF5E5CE6))),
+                                    ),
+                                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                                  ),
+                                ),
+                                
+                                // Harga Field
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 4),
                                   child: TextField(
                                     controller: _itemAmountControllers[index],
                                     keyboardType: TextInputType.number,
                                     textAlign: TextAlign.right,
                                     decoration: const InputDecoration(
                                       isDense: true,
-                                      hintText: "0",
+                                      contentPadding: EdgeInsets.symmetric(vertical: 6),
                                       border: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFE5ECF2))),
                                       focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF5E5CE6))),
                                     ),
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                      color: Colors.black87,
-                                    ),
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
                                   ),
                                 ),
                               ],
-                            ),
-                          );
-                        },
+                            );
+                          }),
+                        ],
                       ),
+                      const SizedBox(height: 16),
                       const Divider(height: 24, thickness: 1.5),
                       
                       // Dynamic Live Total Row
