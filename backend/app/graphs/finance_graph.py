@@ -60,6 +60,7 @@ class AgentState(TypedDict):
     intent: Optional[str]
     extracted_data: Optional[Dict[str, Any]]
     response: Optional[str]
+    logs: List[str]
 
 # Initialize LLM
 llm = None
@@ -126,6 +127,7 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "amount": item.amount if item.amount is not None else 0,
                     "quantity": item.quantity
                 })
+            conf_val = extracted.confidence_score if extracted.confidence_score is not None else 1.0
             return {
                 "intent": extracted.intent,
                 "extracted_data": {
@@ -134,10 +136,11 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "type": extracted.type or ("OUT" if extracted.intent == "ADD_EXPENSE" else "IN"),
                     "items": items_list,
                     "sql_query": extracted.sql_query,
-                    "confidence_score": extracted.confidence_score if extracted.confidence_score is not None else 1.0,
+                    "confidence_score": conf_val,
                     "is_ambiguous": extracted.is_ambiguous if extracted.is_ambiguous is not None else False,
                     "clarification_question": extracted.clarification_question
-                }
+                },
+                "logs": [f"[Orchestrator] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{extracted.intent}' (Confidence: {int(conf_val * 100)}%)."]
             }
         except Exception as e:
             logging.error(f"LLM extraction error: {e}. Falling back to rule-based.")
@@ -195,9 +198,11 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             "clarification_question": None if amount > 0 else "Berapa nominal pendapatan Anda?"
         }
         
+    conf_val = extracted_data.get("confidence_score", 1.0)
     return {
         "intent": intent,
-        "extracted_data": extracted_data
+        "extracted_data": extracted_data,
+        "logs": [f"[Orchestrator (Fallback)] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{intent}' (Confidence: {int(conf_val * 100)}%)."]
     }
 
 # 2. Tool Executor Node
@@ -207,6 +212,9 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     user_id = state.get("user_id", "default_user")
     last_message = state["messages"][-1]["content"] if state["messages"] else ""
     
+    # Initialize current execution logs
+    current_logs = list(state.get("logs") or [])
+    
     if intent in ["ADD_EXPENSE", "ADD_INCOME"]:
         confidence_score = extracted_data.get("confidence_score", 1.0)
         is_ambiguous = extracted_data.get("is_ambiguous", False)
@@ -215,16 +223,19 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         # Check for ambiguity or low confidence
         if is_ambiguous or confidence_score < 0.8:
             confidence_pct = int(confidence_score * 100)
+            current_logs.append(f"[Entry Agent] Transaksi terdeteksi kurang lengkap/ambigu (Confidence: {confidence_pct}%). Mengaktifkan alur klarifikasi reaktif.")
             reply = clarification_question or "Maaf, informasi transaksi kurang lengkap. Bisa tolong sebutkan nominal uang dan detail barangnya secara jelas?"
-            return {"response": f"{reply} (Confidence: {confidence_pct}%)"}
+            return {"response": f"{reply} (Confidence: {confidence_pct}%)", "logs": current_logs}
 
         items_data = extracted_data.get("items") or []
         if not items_data:
-            return {"response": "Maaf, saya tidak menemukan item transaksi dalam pesan Anda."}
+            current_logs.append("[Entry Agent] Gagal memproses: tidak menemukan item detail belanja.")
+            return {"response": "Maaf, saya tidak menemukan item transaksi dalam pesan Anda.", "logs": current_logs}
             
         total_amount = sum(item.get("amount", 0) * item.get("quantity", 1) for item in items_data)
         if total_amount <= 0:
-            return {"response": "Maaf, saya tidak dapat mencatat transaksi jika nominalnya kosong atau nol. Silakan sebutkan jumlah uangnya secara jelas."}
+            current_logs.append("[Entry Agent] Gagal memproses: nominal belanja nol.")
+            return {"response": "Maaf, saya tidak dapat mencatat transaksi jika nominalnya kosong atau nol. Silakan sebutkan jumlah uangnya secara jelas.", "logs": current_logs}
             
         # Create summary note for parent Transaction
         note_summary = ", ".join(f"{item.get('note')}" for item in items_data)
@@ -232,6 +243,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         pm = extracted_data.get("payment_method") or "tunai"
         tx_type = "OUT" if intent == "ADD_EXPENSE" else "IN"
         
+        current_logs.append(f"[Entry Agent] Membuka koneksi database untuk merekam transaksi {tx_type.lower()} sebesar Rp {total_amount}.")
         # Save to DB
         db = SessionLocal()
         try:
@@ -258,6 +270,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             db.commit()
             db.refresh(tx)
             
+            current_logs.append(f"[Entry Agent] Sukses menyimpan transaksi (ID: {tx.id}) ke database.")
             items_str = ", ".join([f"{di.note} (x{di.quantity}): Rp {di.amount}" for di in tx.items])
             confidence_pct = int(confidence_score * 100)
             if llm:
@@ -272,6 +285,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 response_msg = f"Berhasil mencatat {tx_type.lower()} untuk detail: [{items_str}] dengan total Rp {tx.amount} ({tx.payment_method}). (Confidence: {confidence_pct}%)"
         except Exception as e:
             db.rollback()
+            current_logs.append(f"[Entry Agent] Error penyimpanan database: {e}")
             response_msg = f"Gagal menyimpan transaksi ke database: {e}"
         finally:
             db.close()
@@ -279,8 +293,10 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     elif intent == "APPEND_ITEM":
         items_data = extracted_data.get("items") or []
         if not items_data:
-            return {"response": "Maaf, saya tidak menemukan item tambahan dalam pesan Anda."}
+            current_logs.append("[Entry Agent] Gagal menambahkan: item tidak ditemukan.")
+            return {"response": "Maaf, saya tidak menemukan item tambahan dalam pesan Anda.", "logs": current_logs}
             
+        current_logs.append("[Context Agent] Mencari transaksi terakhir pengguna untuk menambahkan item...")
         db = SessionLocal()
         try:
             last_tx = db.query(Transaction)\
@@ -288,8 +304,10 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 .order_by(Transaction.created_at.desc())\
                 .first()
             if not last_tx:
-                return {"response": "Tidak ditemukan transaksi sebelumnya untuk ditambahkan item."}
+                current_logs.append("[Context Agent] Gagal: Tidak ada transaksi sebelumnya yang ditemukan di database.")
+                return {"response": "Tidak ditemukan transaksi sebelumnya untuk ditambahkan item.", "logs": current_logs}
                 
+            current_logs.append(f"[Context Agent] Ditemukan transaksi terakhir (ID: {last_tx.id}) '{last_tx.note}' sebesar Rp {last_tx.amount}.")
             total_added = 0
             added_items_str_list = []
             for item in items_data:
@@ -311,6 +329,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             db.commit()
             db.refresh(last_tx)
             
+            current_logs.append(f"[Entry Agent] Ditambahkan item baru. Total transaksi diupdate menjadi Rp {last_tx.amount}.")
             added_items_str = ", ".join(added_items_str_list)
             if llm:
                 prompt = (
@@ -324,12 +343,14 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 response_msg = f"Berhasil menambahkan [{added_items_str}] ke transaksi terakhir. Total transaksi sekarang: Rp {last_tx.amount}."
         except Exception as e:
             db.rollback()
+            current_logs.append(f"[Entry Agent] Error saat menambahkan item ke DB: {e}")
             response_msg = f"Gagal menambahkan item ke transaksi terakhir: {e}"
         finally:
             db.close()
 
     elif intent == "MODIFY_LAST":
         items_data = extracted_data.get("items") or []
+        current_logs.append("[Context Agent] Mencari transaksi terakhir pengguna untuk direvisi...")
         db = SessionLocal()
         try:
             last_tx = db.query(Transaction)\
@@ -337,8 +358,10 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 .order_by(Transaction.created_at.desc())\
                 .first()
             if not last_tx:
-                return {"response": "Tidak ditemukan transaksi sebelumnya untuk dimodifikasi."}
+                current_logs.append("[Context Agent] Gagal: Tidak ada transaksi sebelumnya yang ditemukan.")
+                return {"response": "Tidak ditemukan transaksi sebelumnya untuk dimodifikasi.", "logs": current_logs}
                 
+            current_logs.append(f"[Context Agent] Ditemukan transaksi (ID: {last_tx.id}) '{last_tx.note}' Rp {last_tx.amount}.")
             if items_data:
                 new_amount = items_data[0].get("amount", 0)
                 if new_amount > 0:
@@ -351,6 +374,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     db.commit()
                     db.refresh(last_tx)
                     
+                    current_logs.append(f"[Entry Agent] Berhasil mengupdate nominal transaksi dari Rp {old_amount} menjadi Rp {new_amount}.")
                     if llm:
                         prompt = (
                             f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
@@ -362,16 +386,20 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     else:
                         response_msg = f"Berhasil mengubah nominal transaksi terakhir menjadi Rp {new_amount}."
                 else:
+                    current_logs.append("[Entry Agent] Gagal merevisi: nominal harga baru 0 atau kurang.")
                     response_msg = "Maaf, nominal harga baru tidak valid atau tidak terbaca."
             else:
+                current_logs.append("[Entry Agent] Gagal merevisi: data revisi kosong.")
                 response_msg = "Maaf, tidak menemukan informasi nominal revisi baru."
         except Exception as e:
             db.rollback()
+            current_logs.append(f"[Entry Agent] Error modifikasi database: {e}")
             response_msg = f"Gagal memodifikasi transaksi terakhir: {e}"
         finally:
             db.close()
             
     elif intent == "UNDO":
+        current_logs.append("[Context Agent] Mencari transaksi terakhir pengguna untuk dihapus...")
         db = SessionLocal()
         try:
             last_tx = db.query(Transaction)\
@@ -382,8 +410,11 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 note_to_del = last_tx.note
                 amount_to_del = last_tx.amount
                 type_to_del = last_tx.type.lower()
+                
                 db.delete(last_tx)
                 db.commit()
+                
+                current_logs.append(f"[Entry Agent] Berhasil menghapus transaksi ID: {last_tx.id} ('{note_to_del}') sebesar Rp {amount_to_del}.")
                 response_msg = f"Berhasil membatalkan (menghapus) transaksi {type_to_del} terakhir untuk '{note_to_del}' sebesar Rp {amount_to_del}."
                 if llm:
                     prompt = (
@@ -394,6 +425,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     llm_response = llm.invoke(prompt)
                     response_msg = llm_response.content
             else:
+                current_logs.append("[Context Agent] Gagal: Tidak ada transaksi terakhir ditemukan untuk dibatalkan.")
                 response_msg = "Tidak ditemukan transaksi terakhir untuk dibatalkan."
                 if llm:
                     prompt = (
@@ -405,6 +437,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     response_msg = llm_response.content
         except Exception as e:
             db.rollback()
+            current_logs.append(f"[Entry Agent] Error database undo: {e}")
             response_msg = f"Gagal membatalkan transaksi: {e}"
         finally:
             db.close()
@@ -412,11 +445,13 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     elif intent == "QUERY":
         sql_query = extracted_data.get("sql_query")
         if not sql_query:
-            return {"response": "Maaf, saya tidak dapat memahami query untuk pertanyaan Anda."}
+            current_logs.append("[Analyst Agent] Gagal: SQL query tidak dihasilkan oleh model.")
+            return {"response": "Maaf, saya tidak dapat memahami query untuk pertanyaan Anda.", "logs": current_logs}
             
         normalized_sql = sql_query.strip().upper()
         if not normalized_sql.startswith("SELECT"):
-            return {"response": "Akses ditolak: Hanya query SELECT membaca data yang diizinkan."}
+            current_logs.append("[Analyst Agent] Keamanan terpicu: Query tidak diawali dengan SELECT.")
+            return {"response": "Akses ditolak: Hanya query SELECT membaca data yang diizinkan.", "logs": current_logs}
             
         # Clean function calls like EXTRACT(... FROM ...) to avoid false positive table matches
         check_query = re.sub(r'\b\w+\s*\([^)]*?FROM[^)]*?\)', '', sql_query, flags=re.IGNORECASE)
@@ -428,13 +463,16 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             if '.' in raw_table:
                 raw_table = raw_table.split('.')[-1]
             if raw_table and raw_table not in allowed_tables:
-                return {"response": f"Akses ditolak: Tidak diizinkan mengakses tabel '{raw_table}'."}
+                current_logs.append(f"[Analyst Agent] Keamanan terpicu: Mencoba mengakses tabel terlarang '{raw_table}'.")
+                return {"response": f"Akses ditolak: Tidak diizinkan mengakses tabel '{raw_table}'.", "logs": current_logs}
                 
         blocked_keywords = ["DELETE", "DROP", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE", "REPLACE"]
         for blocked in blocked_keywords:
             if re.search(r'\b' + blocked + r'\b', normalized_sql):
-                return {"response": f"Akses ditolak: Query mengandung perintah terlarang '{blocked}'."}
+                current_logs.append(f"[Analyst Agent] Keamanan terpicu: Query mengandung keyword destruktif '{blocked}'.")
+                return {"response": f"Akses ditolak: Query mengandung perintah terlarang '{blocked}'.", "logs": current_logs}
                 
+        current_logs.append(f"[Analyst Agent] Query tervalidasi aman. Mengeksekusi SQL: \"{sql_query}\".")
         db = SessionLocal()
         try:
             from sqlalchemy import text
@@ -446,6 +484,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             for row in rows:
                 formatted_results.append(dict(zip(columns, row)))
                 
+            current_logs.append(f"[Analyst Agent] Kueri berhasil dieksekusi, mendapatkan {len(formatted_results)} baris hasil.")
             if not formatted_results:
                 response_msg = "Tidak ditemukan data transaksi yang sesuai dengan pertanyaan Anda."
             else:
@@ -462,10 +501,12 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     response_msg = f"Hasil analisis data: {formatted_results}"
         except Exception as e:
             logging.error(f"Error executing database query: {e}")
+            current_logs.append(f"[Analyst Agent] Gagal mengeksekusi SQL query: {e}")
             response_msg = f"Gagal mengambil data dari database: {e}"
         finally:
             db.close()
     else:
+        current_logs.append("[Conversation Agent] Menjawab pesan obrolan umum/sapaan pengguna.")
         response_msg = "Halo! Ada yang bisa saya bantu dengan keuangan Anda?"
         if llm:
             prompt = (
@@ -476,7 +517,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             llm_response = llm.invoke(prompt)
             response_msg = llm_response.content
         
-    return {"response": response_msg}
+    return {"response": response_msg, "logs": current_logs}
 
 # Build LangGraph StateGraph
 builder = StateGraph(AgentState)

@@ -20,6 +20,7 @@ import 'auth_screens.dart';
 import 'settings_profile_screens.dart';
 import 'transaction_history_screen.dart';
 import 'transaction_detail_screen.dart';
+import 'agent_control_center_screen.dart';
 import '../../core/utils/amount_parser.dart';
 
 // ============================================================
@@ -63,6 +64,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   void _onTabChanged() {
     _updateActiveChatType();
+    setState(() {});
   }
 
   void _updateActiveChatType() {
@@ -170,7 +172,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
       if (response != null) {
         // Show AI reply
-        await finance.addMessage(response.reply, true);
+        await finance.addMessage(response.reply, true, logs: response.logs);
         if (_isChatExpanded) {
           voice.speak(response.reply);
         }
@@ -255,6 +257,112 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
             // AI Chat panel overlay
             _buildChatPanel(finance),
+          ],
+        ),
+        bottomNavigationBar: BottomAppBar(
+          shape: const CircularNotchedRectangle(),
+          notchMargin: 8,
+          color: Colors.white,
+          elevation: 10,
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: _buildBottomNavItems(finance, tabCount),
+          ),
+        ),
+        floatingActionButton: FloatingActionButton(
+          shape: const CircleBorder(),
+          onPressed: () => _toggleChat(!_isChatExpanded),
+          backgroundColor: const Color(0xFF5E5CE6),
+          elevation: 4,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              const Icon(
+                Icons.chat_bubble_rounded,
+                color: Colors.white,
+                size: 26,
+              ),
+              if (finance.pendingCount > 0)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                    ),
+                    constraints: const BoxConstraints(
+                      minWidth: 16,
+                      minHeight: 16,
+                    ),
+                    child: Center(
+                      child: Text(
+                        finance.pendingCount.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      ),
+    );
+  }
+
+  List<Widget> _buildBottomNavItems(FinanceProvider finance, int tabCount) {
+    if (tabCount == 2) {
+      return [
+        _buildTabItem(0, Icons.payments_rounded, "Tunai"),
+        const SizedBox(width: 48), // Space for FAB
+        _buildTabItem(1, Icons.credit_card_rounded, "Non Tunai"),
+      ];
+    } else {
+      return [
+        _buildTabItem(0, Icons.payments_rounded, "Tunai"),
+        _buildTabItem(1, Icons.credit_card_rounded, "Non Tunai"),
+        const SizedBox(width: 48), // Space for FAB
+        _buildTabItem(2, Icons.group_rounded, "Sharing"),
+        _buildTabItem(-1, Icons.menu_open_rounded, "Menu", onPressed: () {
+          _scaffoldKey.currentState?.openDrawer();
+        }),
+      ];
+    }
+  }
+
+  Widget _buildTabItem(int index, IconData icon, String label, {VoidCallback? onPressed}) {
+    final isSelected = index >= 0 && _tabController.index == index;
+    final color = isSelected ? const Color(0xFF5E5CE6) : Colors.grey.shade400;
+
+    return Expanded(
+      child: InkWell(
+        onTap: onPressed ?? () {
+          if (index >= 0) {
+            _tabController.animateTo(index);
+            setState(() {});
+          }
+        },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
           ],
         ),
       ),
@@ -344,80 +452,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Chat button
-                  Stack(
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          _isChatExpanded
-                              ? Icons.chat_bubble_rounded
-                              : Icons.chat_bubble_outline_rounded,
-                          color: Colors.white,
+                  IconButton(
+                    icon: const Icon(Icons.psychology_outlined, color: Colors.white),
+                    tooltip: "Jarvis Panel",
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const AgentControlCenterScreen(),
                         ),
-                        onPressed: () => _toggleChat(!_isChatExpanded),
-                      ),
-                      if (finance.pendingCount > 0)
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: Container(
-                            width: 16,
-                            height: 16,
-                            decoration: const BoxDecoration(
-                              color: Colors.red,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Center(
-                              child: Text(
-                                finance.pendingCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
+                      );
+                    },
                   ),
                 ],
               ),
             ),
-            // Tab bar
-            TabBar(
-              controller: _tabController,
-              indicatorColor: Colors.white,
-              indicatorWeight: 3,
-              labelColor: Colors.white,
-              unselectedLabelColor: Colors.white60,
-              labelStyle: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-              ),
-              unselectedLabelStyle: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-              ),
-              tabs: [
-                const Tab(
-                  icon: Icon(Icons.payments_rounded, size: 18),
-                  text: "Tunai",
-                  iconMargin: EdgeInsets.only(bottom: 2),
-                ),
-                const Tab(
-                  icon: Icon(Icons.credit_card_rounded, size: 18),
-                  text: "Non Tunai",
-                  iconMargin: EdgeInsets.only(bottom: 2),
-                ),
-                if (tabCount == 3)
-                  const Tab(
-                    icon: Icon(Icons.group_rounded, size: 18),
-                    text: "Sharing",
-                    iconMargin: EdgeInsets.only(bottom: 2),
-                  ),
-              ],
-            ),
+            const SizedBox(height: 8),
           ],
         ),
       ),
@@ -862,6 +912,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
     }
 
+    final rawLogs = msg['logs'];
+    final logs = rawLogs is List
+        ? List<String>.from(rawLogs.map((e) => e.toString()))
+        : null;
+
     return Align(
       alignment: isAi ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
@@ -890,13 +945,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ],
         ),
-        child: Text(
-          text,
-          style: TextStyle(
-            color: isAi ? const Color(0xFF1E1E2C) : Colors.white,
-            fontSize: 14,
-            height: 1.4,
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              text,
+              style: TextStyle(
+                color: isAi ? const Color(0xFF1E1E2C) : Colors.white,
+                fontSize: 14,
+                height: 1.4,
+              ),
+            ),
+            if (isAi && logs != null && logs.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              const Divider(color: Colors.black12, height: 10),
+              const SizedBox(height: 4),
+              const Row(
+                children: [
+                  Icon(Icons.psychology_outlined, size: 12, color: Colors.blueAccent),
+                  SizedBox(width: 4),
+                  Text("Jarvis Steps:", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              ...logs.map((log) => Padding(
+                padding: const EdgeInsets.only(bottom: 2.0),
+                child: Text(
+                  "• $log",
+                  style: const TextStyle(fontSize: 9, color: Colors.black54, fontFamily: "monospace"),
+                ),
+              )),
+            ]
+          ],
         ),
       ),
     );

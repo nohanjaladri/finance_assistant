@@ -5,11 +5,13 @@ class BackendAiResponse {
   final String reply;
   final String intent;
   final Map<String, dynamic> extractedData;
+  final List<String> logs;
 
   BackendAiResponse({
     required this.reply,
     required this.intent,
     required this.extractedData,
+    required this.logs,
   });
 
   factory BackendAiResponse.fromJson(Map<String, dynamic> json) {
@@ -17,13 +19,16 @@ class BackendAiResponse {
       reply: json['reply'] as String? ?? 'Gagal memproses.',
       intent: json['intent'] as String? ?? 'UNKNOWN',
       extractedData: json['extracted_data'] as Map<String, dynamic>? ?? {},
+      logs: (json['logs'] as List<dynamic>?)?.map((e) => e as String).toList() ?? [],
     );
   }
 }
 
 class BackendAiService {
   final Dio _dio = Dio();
-  final String baseUrl = "https://finance-assistant-gilt.vercel.app";
+  final String baseUrl = kDebugMode 
+      ? (defaultTargetPlatform == TargetPlatform.android ? "http://10.0.2.2:8000" : "http://localhost:8000")
+      : "https://finance-assistant-gilt.vercel.app";
 
   Future<BackendAiResponse?> sendMessage(String message, {String userId = "default_user"}) async {
     debugPrint("=== AI PROCESS START ===");
@@ -75,6 +80,46 @@ class BackendAiService {
       }
     } catch (e) {
       debugPrint("[STT WHISPER] Error transcribing audio: $e");
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> simulateEntryAgent(String message) async {
+    try {
+      final response = await _dio.post("$baseUrl/agent/entry", data: {"message": message});
+      if (response.statusCode == 200) return response.data as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint("Error Entry Agent Sim: $e");
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> simulateAnalystAgent(String query, String userId) async {
+    try {
+      final response = await _dio.post("$baseUrl/agent/analyst", data: {"message": query, "user_id": userId});
+      if (response.statusCode == 200) return response.data as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint("Error Analyst Agent Sim: $e");
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> simulateBudgetAgent(String userId) async {
+    try {
+      final response = await _dio.get("$baseUrl/agent/budget/$userId");
+      if (response.statusCode == 200) return response.data as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint("Error Budget Agent Sim: $e");
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> simulateSearchAgent(String message) async {
+    try {
+      final response = await _dio.post("$baseUrl/agent/search", data: {"message": message});
+      if (response.statusCode == 200) return response.data as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint("Error Search Agent Sim: $e");
     }
     return null;
   }
