@@ -58,4 +58,24 @@ class BackendAiService {
     debugPrint("=== AI PROCESS END (WITH NULL RESPONSE) ===");
     return null;
   }
+
+  Future<String?> transcribeAudio(String filePath) async {
+    try {
+      debugPrint("[STT WHISPER] Transcribing file: $filePath");
+      final formData = FormData.fromMap({
+        'file': await MultipartFile.fromFile(filePath, filename: 'audio.m4a'),
+      });
+      final response = await _dio.post(
+        "$baseUrl/transcribe",
+        data: formData,
+      );
+      if (response.statusCode == 200 && response.data != null) {
+        debugPrint("[STT WHISPER] Response: ${response.data}");
+        return response.data['text'] as String?;
+      }
+    } catch (e) {
+      debugPrint("[STT WHISPER] Error transcribing audio: $e");
+    }
+    return null;
+  }
 }

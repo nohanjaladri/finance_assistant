@@ -765,27 +765,41 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return GestureDetector(
       onTap: () async {
         if (voice.isListening) {
-          await voice.stopListening();
           setState(() {
-            _voicePreviewText = null;
+            _voicePreviewText = "Menerjemahkan suara...";
           });
-        } else {
-          await voice.startListening(
+          await voice.stopListeningAndTranscribe(
             onResult: (text, isFinal) {
-              if (text.isNotEmpty) {
+              if (isFinal) {
+                setState(() {
+                  _voicePreviewText = null;
+                });
+                if (text != "Gagal menerjemahkan suara." && text.trim().isNotEmpty) {
+                  _sendMessage(customText: text);
+                } else if (text == "Gagal menerjemahkan suara.") {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Gagal menerjemahkan rekaman suara."),
+                      backgroundColor: Colors.redAccent,
+                    ),
+                  );
+                }
+              } else {
                 setState(() {
                   _voicePreviewText = text;
                 });
                 _jumpChatToBottom();
               }
-              if (isFinal) {
-                setState(() {
-                  _voicePreviewText = null;
-                });
-                _sendMessage(customText: text);
-              }
             },
           );
+        } else {
+          await voice.startListening(
+            onResult: (text, isFinal) {},
+          );
+          setState(() {
+            _voicePreviewText = "Mendengarkan... Ketuk lagi untuk kirim";
+          });
+          _jumpChatToBottom();
         }
       },
       child: Container(
