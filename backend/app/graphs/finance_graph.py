@@ -182,7 +182,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             return {"response": "Maaf, saya tidak dapat mencatat transaksi jika nominalnya kosong atau nol. Silakan sebutkan jumlah uangnya secara jelas."}
             
         # Create summary note for parent Transaction
-        note_summary = ", ".join(f"{item.get('note')} (x{item.get('quantity', 1)})" for item in items_data)
+        note_summary = ", ".join(f"{item.get('note')}" for item in items_data)
         category = extracted_data.get("category") or "Other"
         pm = extracted_data.get("payment_method") or "tunai"
         tx_type = "OUT" if intent == "ADD_EXPENSE" else "IN"

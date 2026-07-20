@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../../data/models/transaction_model.dart';
@@ -11,25 +10,21 @@ class TransactionDetailScreen extends StatefulWidget {
   const TransactionDetailScreen({super.key, required this.transaction});
 
   @override
-  State<TransactionDetailScreen> createState() =>
-      _TransactionDetailScreenState();
+  State<TransactionDetailScreen> createState() => _TransactionDetailScreenState();
 }
 
-class _TransactionDetailScreenState extends State<TransactionDetailScreen>
-    with SingleTickerProviderStateMixin {
+class _TransactionDetailScreenState extends State<TransactionDetailScreen> {
   late TextEditingController _noteController;
   late PaymentMethod _paymentMethod;
   bool _isSaving = false;
-  bool _isEditing = false;
 
   final List<TextEditingController> _itemNoteControllers = [];
   final List<TextEditingController> _itemAmountControllers = [];
   final List<TextEditingController> _itemQtyControllers = [];
-
+  
+  // Track dynamically computed total
   int _liveTotal = 0;
-
-  late AnimationController _editAnimController;
-  late Animation<double> _editFadeAnim;
+  List<TransactionItemModel> _displayItems = [];
 
   @override
   void initState() {
@@ -37,27 +32,53 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen>
     _noteController = TextEditingController(text: widget.transaction.note);
     _paymentMethod = widget.transaction.paymentMethod;
 
-    _editAnimController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
-    _editFadeAnim = CurvedAnimation(
-      parent: _editAnimController,
-      curve: Curves.easeInOut,
-    );
+    // Dynamically parse note if transaction_items is empty in DB
+    _displayItems = List.from(widget.transaction.items);
+    if (_displayItems.isEmpty && widget.transaction.note.contains(',')) {
+      final parts = widget.transaction.note.split(',');
+      for (final part in parts) {
+        final cleanPart = part.trim();
+        if (cleanPart.isEmpty) continue;
+        
+        String name = cleanPart;
+        int qty = 1;
+        int price = widget.transaction.amount ~/ parts.length; // rough split estimation
 
-    for (final item in widget.transaction.items) {
-      final noteCtrl = TextEditingController(text: item.note);
-      final amountCtrl = TextEditingController(text: item.amount.toString());
-      final qtyCtrl = TextEditingController(text: item.quantity.toString());
+        // Parse quantity if format is "(x2)" or "(2)"
+        final qtyMatch = RegExp(r'\((?:x|X)?(\d+)\)').firstMatch(cleanPart);
+        if (qtyMatch != null) {
+          qty = int.tryParse(qtyMatch.group(1) ?? '1') ?? 1;
+          name = cleanPart.replaceAll(qtyMatch.group(0)!, '').trim();
+        }
 
-      amountCtrl.addListener(_recalculateTotal);
-      qtyCtrl.addListener(_recalculateTotal);
-
-      _itemNoteControllers.add(noteCtrl);
-      _itemAmountControllers.add(amountCtrl);
-      _itemQtyControllers.add(qtyCtrl);
+        _displayItems.add(TransactionItemModel(
+          transactionId: widget.transaction.id ?? 0,
+          note: name,
+          amount: price,
+          quantity: qty,
+        ));
+      }
     }
+
+    // Initialize controllers for display items
+    if (_displayItems.isNotEmpty) {
+      for (final item in _displayItems) {
+        final noteCtrl = TextEditingController(text: item.note);
+        final amountCtrl = TextEditingController(text: item.amount.toString());
+        final qtyCtrl = TextEditingController(text: item.quantity.toString());
+        
+        amountCtrl.addListener(_recalculateTotal);
+        qtyCtrl.addListener(_recalculateTotal);
+
+        _itemNoteControllers.add(noteCtrl);
+        _itemAmountControllers.add(amountCtrl);
+        _itemQtyControllers.add(qtyCtrl);
+      }
+    } else {
+      // Single item fallback
+      _noteController.addListener(_recalculateTotal);
+    }
+    
     _recalculateTotal();
   }
 
@@ -70,28 +91,16 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen>
         total += (price * qty);
       }
     } else {
-      total = widget.transaction.amount;
+      total = int.tryParse(_noteController.text) ?? widget.transaction.amount;
     }
     setState(() {
       _liveTotal = total;
     });
   }
 
-  void _toggleEdit() {
-    setState(() {
-      _isEditing = !_isEditing;
-    });
-    if (_isEditing) {
-      _editAnimController.forward();
-    } else {
-      _editAnimController.reverse();
-    }
-    HapticFeedback.lightImpact();
-  }
-
   @override
   void dispose() {
-    _editAnimController.dispose();
+    _noteController.removeListener(_recalculateTotal);
     _noteController.dispose();
     for (final c in _itemNoteControllers) {
       c.dispose();
@@ -120,33 +129,31 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen>
     final finance = context.read<FinanceProvider>();
 
     try {
-      if (widget.transaction.items.isNotEmpty) {
-        for (int i = 0; i < widget.transaction.items.length; i++) {
-          final item = widget.transaction.items[i];
+      // 1. Save items
+      if (_displayItems.isNotEmpty) {
+        for (int i = 0; i < _displayItems.length; i++) {
+          final item = _displayItems[i];
           final newNote = _itemNoteControllers[i].text.trim();
-          final newAmount =
-              int.tryParse(_itemAmountControllers[i].text) ?? item.amount;
-          final newQty =
-              int.tryParse(_itemQtyControllers[i].text) ?? item.quantity;
+          final newAmount = int.tryParse(_itemAmountControllers[i].text) ?? item.amount;
+          final newQty = int.tryParse(_itemQtyControllers[i].text) ?? item.quantity;
 
-          await finance.updateTransactionItemManual(
-            transactionId: widget.transaction.id!,
-            itemId: item.id!,
-            note: newNote,
-            amount: newAmount,
-            quantity: newQty,
-          );
+          if (item.id != null) {
+            await finance.updateTransactionItemManual(
+              transactionId: widget.transaction.id!,
+              itemId: item.id!,
+              note: newNote,
+              amount: newAmount,
+              quantity: newQty,
+            );
+          }
         }
       }
 
+      // 2. Save main transaction fields (do not include quantity suffix in note summary at all)
       final ok = await finance.updateTransaction(
         widget.transaction.id!,
-        note: widget.transaction.items.isNotEmpty
-            ? _itemNoteControllers.asMap().entries.map((e) {
-                final noteText = e.value.text.trim();
-                final qtyText = _itemQtyControllers[e.key].text.trim();
-                return "$noteText (x$qtyText)";
-              }).join(", ")
+        note: _displayItems.isNotEmpty 
+            ? _itemNoteControllers.map((c) => c.text.trim()).join(", ")
             : _noteController.text.trim(),
         paymentMethod: _paymentMethod,
         amount: _liveTotal,
@@ -155,45 +162,16 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(16),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            content: Row(
-              children: [
-                Icon(
-                  ok ? Icons.check_circle_outline : Icons.error_outline,
-                  color: Colors.white,
-                  size: 18,
-                ),
-                const SizedBox(width: 10),
-                Text(ok
-                    ? "Transaksi berhasil diperbarui!"
-                    : "Gagal memperbarui transaksi."),
-              ],
-            ),
-            backgroundColor: ok
-                ? const Color(0xFF22C55E)
-                : const Color(0xFFEF4444),
+            content: Text(ok ? "Transaksi berhasil diperbarui!" : "Gagal memperbarui transaksi."),
+            backgroundColor: ok ? Colors.green : Colors.red,
           ),
         );
-        if (ok) {
-          setState(() => _isEditing = false);
-          _editAnimController.reverse();
-          Navigator.pop(context);
-        }
+        if (ok) Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(16),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            content: Text("Error: $e"),
-            backgroundColor: const Color(0xFFEF4444),
-          ),
+          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
         );
       }
     } finally {
@@ -204,77 +182,20 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen>
   Future<void> _deleteTx() async {
     final confirm = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black54,
-      builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        backgroundColor: Colors.white,
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEE2E2),
-                  borderRadius: BorderRadius.circular(32),
-                ),
-                child: const Icon(Icons.delete_outline_rounded,
-                    color: Color(0xFFEF4444), size: 32),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                "Hapus Transaksi?",
-                style:
-                    TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                "Transaksi ini akan dihapus secara permanen dan tidak dapat dikembalikan.",
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.5),
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        side: BorderSide(color: Colors.grey.shade300),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                      ),
-                      child: const Text("Batal",
-                          style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black54)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => Navigator.pop(ctx, true),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFEF4444),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                      ),
-                      child: const Text("Hapus",
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+      builder: (ctx) => AlertDialog(
+        title: const Text("Hapus Transaksi"),
+        content: const Text("Apakah Anda yakin ingin menghapus transaksi ini permanen?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Batal"),
           ),
-        ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text("Hapus", style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
     );
 
@@ -282,669 +203,449 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen>
       setState(() => _isSaving = true);
       final finance = context.read<FinanceProvider>();
       final ok = await finance.deleteTransaction(widget.transaction.id!);
-
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            behavior: SnackBarBehavior.floating,
-            margin: const EdgeInsets.all(16),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            content: Text(ok
-                ? "Transaksi berhasil dihapus"
-                : "Gagal menghapus transaksi"),
-            backgroundColor:
-                ok ? const Color(0xFF22C55E) : const Color(0xFFEF4444),
+            content: Text(ok ? "Transaksi berhasil dihapus" : "Gagal menghapus transaksi"),
+            backgroundColor: ok ? Colors.green : Colors.red,
           ),
         );
-        if (ok) Navigator.pop(context);
+        if (ok) {
+          Navigator.pop(context);
+        }
       }
     }
   }
 
-  // ─── Build ───────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
-    final isIncome =
-        widget.transaction.type == TransactionType.income;
-
-    // Gradient colours per type
-    final gradientColors = isIncome
-        ? [const Color(0xFF10B981), const Color(0xFF059669)]
-        : [const Color(0xFF6366F1), const Color(0xFF4F46E5)];
-
-    final accentColor = isIncome
-        ? const Color(0xFF10B981)
-        : const Color(0xFF6366F1);
+    final isIncome = widget.transaction.type == TransactionType.income;
+    final typeColor = isIncome ? const Color(0xFF00C48C) : const Color(0xFFFF647C);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      body: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
-        slivers: [
-          // ── Premium Gradient App Bar ─────────────────────────────────
-          SliverAppBar(
-            expandedHeight: 280,
-            pinned: true,
-            stretch: true,
-            backgroundColor: gradientColors[1],
-            leading: Padding(
-              padding: const EdgeInsets.all(8),
-              child: CircleAvatar(
-                backgroundColor: Colors.white.withOpacity(0.15),
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                      color: Colors.white, size: 18),
-                  onPressed: () => Navigator.pop(context),
-                ),
+      backgroundColor: const Color(0xFFF8F9FD),
+      appBar: AppBar(
+        title: const Text(
+          "E-Receipt",
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87, fontSize: 18),
+        ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black87, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFFF647C)),
+            onPressed: _isSaving ? null : _deleteTx,
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Modern Digital Header Card
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.02),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: typeColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                    child: Text(
+                      isIncome ? "Pemasukan Digital" : "Pengeluaran Digital",
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: typeColor,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _formatRupiah(_liveTotal),
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                      color: typeColor,
+                      letterSpacing: -1.0,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Divider(color: Color(0xFFF1F3F9)),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text("Waktu Transaksi", style: TextStyle(color: Colors.grey, fontSize: 13, fontWeight: FontWeight.w500)),
+                      Text(
+                        DateFormat('dd MMMM yyyy • HH:mm', 'id_ID').format(widget.transaction.createdAt),
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: Colors.black87),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
-            actions: [
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: CircleAvatar(
-                  backgroundColor: Colors.white.withOpacity(0.15),
-                  child: IconButton(
-                    icon: const Icon(Icons.delete_outline_rounded,
-                        color: Colors.white, size: 20),
-                    onPressed: _isSaving ? null : _deleteTx,
+            const SizedBox(height: 16),
+
+            // Modern Settings Info block
+            const Text(
+              "METODE PEMBAYARAN",
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.grey, letterSpacing: 0.8),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.01),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
                   ),
-                ),
+                ],
               ),
-            ],
-            flexibleSpace: FlexibleSpaceBar(
-              stretchModes: const [StretchMode.zoomBackground],
-              background: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: gradientColors,
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    "Pilih Penyimpanan",
+                    style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w600, fontSize: 14),
                   ),
+                  DropdownButton<PaymentMethod>(
+                    value: _paymentMethod,
+                    underline: const SizedBox(),
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.grey),
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87, fontSize: 14),
+                    items: PaymentMethod.values.map((pm) {
+                      return DropdownMenuItem(
+                        value: pm,
+                        child: Text(pm.label),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null) setState(() => _paymentMethod = val);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // E-INVOICE / DIGITAL SLIP
+            if (isIncome) ...[
+              // --- NOTA TRANSFER MASUK (INCOME) ---
+              const Text(
+                "BUKTI TRANSFER MASUK",
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.grey, letterSpacing: 0.8),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFE5ECF2), width: 1),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.02),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
-                child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
                   child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const SizedBox(height: 32),
-                      // Icon circle
-                      Container(
-                        width: 64,
-                        height: 64,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(32),
-                        ),
-                        child: Icon(
-                          isIncome
-                              ? Icons.south_west_rounded
-                              : Icons.north_east_rounded,
-                          color: Colors.white,
-                          size: 32,
-                        ),
+                      // Status Header
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.verified_rounded, color: Color(0xFF00C48C), size: 20),
+                          const SizedBox(width: 6),
+                          const Text(
+                            "STATUS: BERHASIL",
+                            style: TextStyle(
+                              color: Color(0xFF00C48C),
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 16),
-                      Text(
-                        isIncome ? "Pemasukan" : "Pengeluaran",
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.8),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: 1,
+                      const Divider(color: Color(0xFFF1F3F9)),
+                      const SizedBox(height: 12),
+
+                      // Sumber/Pemberi (Editable)
+                      const Text(
+                        "PENGIRIM / SUMBER",
+                        style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _displayItems.isNotEmpty ? _itemNoteControllers[0] : _noteController,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          hintText: "Sumber pemasukan",
+                          filled: true,
+                          fillColor: const Color(0xFFF8F9FD),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         ),
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Nominal
+                      const Text(
+                        "NOMINAL",
+                        style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 6),
                       Text(
                         _formatRupiah(_liveTotal),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 36,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -1,
-                        ),
+                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20, color: Color(0xFF00C48C)),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 16),
+
+                      // Storage Target
+                      const Text(
+                        "TUJUAN PENYIMPANAN",
+                        style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 6),
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 6),
+                        padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(20),
+                          color: const Color(0xFFF8F9FD),
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Text(
-                          DateFormat('dd MMMM yyyy • HH:mm', 'id_ID')
-                              .format(widget.transaction.createdAt),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                          ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _paymentMethod == PaymentMethod.tunai 
+                                  ? Icons.account_balance_wallet_rounded
+                                  : Icons.credit_card_rounded,
+                              size: 16,
+                              color: const Color(0xFF5E5CE6),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _paymentMethod == PaymentMethod.tunai ? "Masuk ke Dompet" : "Masuk ke E-Wallet",
+                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Colors.black87),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
-            ),
-          ),
-
-          // ── Content ─────────────────────────────────────────────────
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // ── Informasi Card ─────────────────────────────────
-                  _SectionLabel(label: "INFORMASI TRANSAKSI"),
-                  const SizedBox(height: 10),
-                  _PremiumCard(
-                    child: Column(
-                      children: [
-                        if (widget.transaction.items.isEmpty) ...[
-                          _InfoRow(
-                            icon: Icons.notes_rounded,
-                            label: "Catatan",
-                            child: TextField(
-                              controller: _noteController,
-                              decoration: const InputDecoration(
-                                isDense: true,
-                                contentPadding: EdgeInsets.zero,
-                                border: InputBorder.none,
-                              ),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
-                              ),
+            ] else ...[
+              // --- E-INVOICE / MODERN DIGITAL EXPENSE ---
+              const Text(
+                "RINCIAN BELANJA DIGITAL",
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.grey, letterSpacing: 0.8),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFE5ECF2), width: 1),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.02),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Header Row
+                      const Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: Text(
+                              "NAMA ITEM",
+                              style: TextStyle(fontWeight: FontWeight.w800, color: Colors.grey, fontSize: 11, letterSpacing: 0.5),
                             ),
                           ),
-                          _Divider(),
-                        ],
-                        _InfoRow(
-                          icon: Icons.category_outlined,
-                          label: "Kategori",
-                          child: _Badge(
-                            label: widget.transaction.category,
-                            color: accentColor,
+                          Expanded(
+                            flex: 1,
+                            child: Text(
+                              "QTY",
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontWeight: FontWeight.w800, color: Colors.grey, fontSize: 11, letterSpacing: 0.5),
+                            ),
                           ),
-                        ),
-                        _Divider(),
-                        _InfoRow(
-                          icon: Icons.payment_rounded,
-                          label: "Metode Pembayaran",
-                          child: widget.transaction.items.isNotEmpty &&
-                                  !_isEditing
-                              ? _Badge(
-                                  label: _paymentMethod.label,
-                                  color: Colors.blueGrey,
-                                )
-                              : DropdownButtonHideUnderline(
-                                  child: DropdownButton<PaymentMethod>(
-                                    value: _paymentMethod,
-                                    isDense: true,
-                                    items: PaymentMethod.values.map((pm) {
-                                      return DropdownMenuItem(
-                                        value: pm,
-                                        child: Text(
-                                          pm.label,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 14,
-                                          ),
-                                        ),
-                                      );
-                                    }).toList(),
-                                    onChanged: (val) {
-                                      if (val != null) {
-                                        setState(() => _paymentMethod = val);
-                                      }
-                                    },
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              "HARGA (RP)",
+                              textAlign: TextAlign.right,
+                              style: TextStyle(fontWeight: FontWeight.w800, color: Colors.grey, fontSize: 11, letterSpacing: 0.5),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      const Divider(color: Color(0xFFF1F3F9)),
+                      
+                      // List of Editable Items
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _displayItems.length,
+                        itemBuilder: (ctx, index) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Row(
+                              children: [
+                                // Editable Name Field
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: _itemNoteControllers[index],
+                                    decoration: InputDecoration(
+                                      isDense: true,
+                                      hintText: "Nama item",
+                                      filled: true,
+                                      fillColor: const Color(0xFFF8F9FD),
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    ),
+                                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.black87),
                                   ),
                                 ),
-                        ),
-                      ],
-                    ),
-                  ),
+                                const SizedBox(width: 8),
 
-                  // ── Rincian Item ────────────────────────────────────
-                  if (widget.transaction.items.isNotEmpty) ...[
-                    const SizedBox(height: 24),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        _SectionLabel(label: "RINCIAN ITEM BELANJA"),
-                        // Edit / Batal toggle pill
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeInOut,
-                          decoration: BoxDecoration(
-                            color: _isEditing
-                                ? const Color(0xFFFEE2E2)
-                                : accentColor.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: InkWell(
-                            onTap: _toggleEdit,
-                            borderRadius: BorderRadius.circular(20),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 7),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    _isEditing
-                                        ? Icons.close_rounded
-                                        : Icons.edit_outlined,
-                                    size: 14,
-                                    color: _isEditing
-                                        ? const Color(0xFFEF4444)
-                                        : accentColor,
+                                // Editable Qty Field
+                                Expanded(
+                                  flex: 1,
+                                  child: TextField(
+                                    controller: _itemQtyControllers[index],
+                                    keyboardType: TextInputType.number,
+                                    textAlign: TextAlign.center,
+                                    decoration: InputDecoration(
+                                      isDense: true,
+                                      hintText: "1",
+                                      filled: true,
+                                      fillColor: const Color(0xFFF8F9FD),
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                                      contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                                    ),
+                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: Colors.black87),
                                   ),
-                                  const SizedBox(width: 5),
-                                  Text(
-                                    _isEditing ? "Batal" : "Edit",
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: _isEditing
-                                          ? const Color(0xFFEF4444)
-                                          : accentColor,
+                                ),
+                                const SizedBox(width: 8),
+                                
+                                // Editable Price Field
+                                Expanded(
+                                  flex: 2,
+                                  child: TextField(
+                                    controller: _itemAmountControllers[index],
+                                    keyboardType: TextInputType.number,
+                                    textAlign: TextAlign.right,
+                                    decoration: InputDecoration(
+                                      isDense: true,
+                                      hintText: "0",
+                                      filled: true,
+                                      fillColor: const Color(0xFFF8F9FD),
+                                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    ),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 13,
+                                      color: Colors.black87,
                                     ),
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-
-                    // Items card
-                    _PremiumCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                          );
+                        },
+                      ),
+                      const Divider(height: 24, thickness: 1, color: Color(0xFFF1F3F9)),
+                      
+                      // Dynamic Live Total Row
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          // ── Header ────────────────────────────────────
-                          Row(
-                            children: [
-                              Expanded(
-                                flex: 5,
-                                child: Text("Nama", style: _headerStyle()),
-                              ),
-                              const SizedBox(width: 8),
-                              SizedBox(
-                                width: 44,
-                                child: Text("Qty",
-                                    textAlign: TextAlign.center,
-                                    style: _headerStyle()),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 4,
-                                child: Text("Harga/pcs",
-                                    textAlign: TextAlign.right,
-                                    style: _headerStyle()),
-                              ),
-                            ],
+                          const Text(
+                            "TOTAL TAGIHAN",
+                            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: Colors.black54, letterSpacing: 0.5),
                           ),
-                          const SizedBox(height: 8),
-                          const Divider(height: 1, thickness: 1),
-
-                          // ── Item Rows ─────────────────────────────────
-                          ...List.generate(widget.transaction.items.length, (i) {
-                            final subtotal =
-                                (int.tryParse(_itemAmountControllers[i].text) ?? 0) *
-                                (int.tryParse(_itemQtyControllers[i].text) ?? 1);
-
-                            return Column(
-                              children: [
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
-                                  child: Row(
-                                    crossAxisAlignment: CrossAxisAlignment.center,
-                                    children: [
-                                      // Nama kolom
-                                      Expanded(
-                                        flex: 5,
-                                        child: _isEditing
-                                            ? _InlineField(
-                                                controller: _itemNoteControllers[i],
-                                                hint: "Nama item",
-                                                accentColor: accentColor,
-                                              )
-                                            : Text(
-                                                _itemNoteControllers[i].text,
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 14,
-                                                  color: Colors.black87,
-                                                ),
-                                              ),
-                                      ),
-                                      const SizedBox(width: 8),
-
-                                      // Qty kolom
-                                      SizedBox(
-                                        width: 44,
-                                        child: _isEditing
-                                            ? _InlineField(
-                                                controller: _itemQtyControllers[i],
-                                                hint: "Qty",
-                                                textAlign: TextAlign.center,
-                                                keyboardType: TextInputType.number,
-                                                accentColor: accentColor,
-                                              )
-                                            : Text(
-                                                "×${_itemQtyControllers[i].text}",
-                                                textAlign: TextAlign.center,
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                  fontSize: 13,
-                                                  color: Colors.black54,
-                                                ),
-                                              ),
-                                      ),
-                                      const SizedBox(width: 8),
-
-                                      // Harga kolom
-                                      Expanded(
-                                        flex: 4,
-                                        child: _isEditing
-                                            ? _InlineField(
-                                                controller: _itemAmountControllers[i],
-                                                hint: "Harga",
-                                                textAlign: TextAlign.right,
-                                                keyboardType: TextInputType.number,
-                                                accentColor: accentColor,
-                                              )
-                                            : Text(
-                                                _formatRupiah(subtotal),
-                                                textAlign: TextAlign.right,
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 14,
-                                                  color: accentColor,
-                                                ),
-                                              ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                if (i < widget.transaction.items.length - 1)
-                                  Divider(
-                                    height: 1,
-                                    thickness: 1,
-                                    color: Colors.grey.withOpacity(0.08),
-                                  ),
-                              ],
-                            );
-                          }),
-
-                          // ── Total Row ─────────────────────────────────
-                          const Padding(
-                            padding: EdgeInsets.only(top: 8),
-                            child: Divider(height: 1, thickness: 1.5),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.only(top: 12),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "Total",
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 15,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                Text(
-                                  _formatRupiah(_liveTotal),
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 18,
-                                    color: accentColor,
-                                    letterSpacing: -0.5,
-                                  ),
-                                ),
-                              ],
+                          Text(
+                            _formatRupiah(_liveTotal),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              fontSize: 18,
+                              color: typeColor,
                             ),
                           ),
                         ],
                       ),
-                    ),
-
-                  ],
-
-                  // ── Save Button ──────────────────────────────────────
-                  if (widget.transaction.items.isEmpty || _isEditing) ...[
-                    const SizedBox(height: 24),
-                    AnimatedOpacity(
-                      opacity: (widget.transaction.items.isEmpty || _isEditing)
-                          ? 1.0
-                          : 0.0,
-                      duration: const Duration(milliseconds: 250),
-                      child: SizedBox(
-                        height: 56,
-                        child: ElevatedButton(
-                          onPressed: _isSaving ? null : _saveChanges,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: accentColor,
-                            disabledBackgroundColor:
-                                accentColor.withOpacity(0.5),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16)),
-                          ),
-                          child: _isSaving
-                              ? const SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(
-                                      color: Colors.white, strokeWidth: 2.5),
-                                )
-                              : const Text(
-                                  "Simpan Perubahan",
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 0.3,
-                                  ),
-                                ),
-                        ),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                ],
+                    ],
+                  ),
+                ),
               ),
+            ],
+            const SizedBox(height: 24),
+
+            ElevatedButton(
+              onPressed: _isSaving ? null : _saveChanges,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF5E5CE6),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                elevation: 0,
+              ),
+              child: _isSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                    )
+                  : const Text(
+                      "Simpan Perubahan",
+                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  TextStyle _headerStyle() => const TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w700,
-        color: Colors.black38,
-        letterSpacing: 0.5,
-      );
-}
-
-// ─── Reusable small widgets ──────────────────────────────────────────────────
-
-class _SectionLabel extends StatelessWidget {
-  final String label;
-  const _SectionLabel({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      label,
-      style: const TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.w800,
-        color: Colors.black38,
-        letterSpacing: 1.2,
-      ),
-    );
-  }
-}
-
-class _PremiumCard extends StatelessWidget {
-  final Widget child;
-  const _PremiumCard({required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 20,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(20),
-      child: child,
-    );
-  }
-}
-
-class _InfoRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Widget child;
-
-  const _InfoRow({
-    required this.icon,
-    required this.label,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: const Color(0xFFF5F7FA),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, size: 18, color: Colors.black45),
-          ),
-          const SizedBox(width: 12),
-          Text(label,
-              style: const TextStyle(
-                  color: Colors.black45,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: child,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Divider extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Divider(
-        height: 1,
-        thickness: 1,
-        color: Colors.grey.withOpacity(0.1));
-  }
-}
-
-class _Badge extends StatelessWidget {
-  final String label;
-  final Color color;
-  const _Badge({required this.label, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          color: color,
+          ],
         ),
       ),
-    );
-  }
-}
-
-class _InlineField extends StatelessWidget {
-  final TextEditingController controller;
-  final String hint;
-  final TextAlign textAlign;
-  final TextInputType keyboardType;
-  final Color accentColor;
-
-  const _InlineField({
-    required this.controller,
-    required this.hint,
-    this.textAlign = TextAlign.start,
-    this.keyboardType = TextInputType.text,
-    required this.accentColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      textAlign: textAlign,
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: const TextStyle(color: Colors.black26, fontSize: 12),
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: Colors.grey.shade200),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: Colors.grey.shade200),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: accentColor, width: 1.5),
-        ),
-        filled: true,
-        fillColor: const Color(0xFFF8F9FA),
-      ),
-      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
     );
   }
 }

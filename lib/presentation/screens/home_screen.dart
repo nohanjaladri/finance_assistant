@@ -663,11 +663,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           ),
                         ],
                       ),
-                      padding: EdgeInsets.only(
+                      padding: const EdgeInsets.only(
                         left: 16,
                         right: 16,
                         top: 12,
-                        bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+                        bottom: 12,
                       ),
                       child: Row(
                         children: [
