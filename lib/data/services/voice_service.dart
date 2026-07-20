@@ -12,6 +12,7 @@ class VoiceService with ChangeNotifier {
   Future<void> init() async {
     try {
       _isInitialized = await _speech.initialize(
+        debugLogging: true, // Enable internal speech_to_text package debug logs
         onError: (errorNotification) {
           debugPrint('SpeechToText onError: ${errorNotification.errorMsg} - permanent: ${errorNotification.permanent}');
           _isListening = false;
@@ -54,8 +55,8 @@ class VoiceService with ChangeNotifier {
           }
         },
         localeId: "id-ID",
-        cancelOnError: true,
-        listenMode: ListenMode.dictation,
+        cancelOnError: false, // Do not cancel immediately on temporary errors
+        listenMode: ListenMode.confirmation, // Optimized for short commands/transactions
       );
     } catch (e) {
       debugPrint('SpeechToText listen exception: $e');
