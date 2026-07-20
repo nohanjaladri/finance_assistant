@@ -203,7 +203,7 @@ class _SttTestScreenState extends State<SttTestScreen> {
             const SizedBox(height: 6),
             Container(
               padding: const EdgeInsets.all(16),
-              minHeight: 80,
+              constraints: const BoxConstraints(minHeight: 80),
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(16),
