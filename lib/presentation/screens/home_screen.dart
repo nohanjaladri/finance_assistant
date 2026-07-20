@@ -122,6 +122,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
+  void _jumpChatToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_chatScrollController.hasClients) {
+        _chatScrollController.jumpTo(_chatScrollController.position.maxScrollExtent);
+      }
+    });
+  }
+
   void _toggleChat(bool open) {
     setState(() => _isChatExpanded = open);
     if (open) _scrollChatToBottom();
@@ -756,7 +764,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 setState(() {
                   _voicePreviewText = text;
                 });
-                _scrollChatToBottom();
+                _jumpChatToBottom();
               }
               if (isFinal) {
                 setState(() {

@@ -8,7 +8,6 @@ class VoiceService with ChangeNotifier {
   bool _isListening = false;
   bool get isListening => _isListening;
   bool _isInitialized = false;
-  String _currentLocaleId = "id-ID";
 
   Future<void> init() async {
     try {
@@ -27,15 +26,6 @@ class VoiceService with ChangeNotifier {
           }
         },
       );
-      
-      if (_isInitialized) {
-        final systemLocale = await _speech.systemLocale();
-        if (systemLocale != null) {
-          _currentLocaleId = systemLocale.localeId;
-          debugPrint('SpeechToText system locale selected: $_currentLocaleId');
-        }
-      }
-      
       debugPrint('SpeechToText initialized successfully: $_isInitialized');
       await _tts.setLanguage("id-ID");
     } catch (e) {
@@ -64,7 +54,7 @@ class VoiceService with ChangeNotifier {
             notifyListeners();
           }
         },
-        localeId: _currentLocaleId, // Use dynamically detected system locale
+        localeId: "id-ID", // Force Indonesian locale so it doesn't default to system locale (e.g. en_US)
         cancelOnError: false,
       );
     } catch (e) {
