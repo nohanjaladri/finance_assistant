@@ -955,13 +955,14 @@ class _TransactionTabState extends State<_TransactionTab> {
   }
 
   String _formatRupiah(int amount) {
+    final isNegative = amount < 0;
     final str = amount.abs().toString();
     final buf = StringBuffer();
     for (int i = 0; i < str.length; i++) {
       if (i > 0 && (str.length - i) % 3 == 0) buf.write('.');
       buf.write(str[i]);
     }
-    return "Rp ${buf.toString()}";
+    return "${isNegative ? '-' : ''}Rp ${buf.toString()}";
   }
 
   String _compactAmount(int amount) {
@@ -1548,10 +1549,11 @@ class _TransactionTabState extends State<_TransactionTab> {
                 duration: const Duration(milliseconds: 1500),
                 curve: Curves.easeOutQuart,
                 builder: (context, value, child) {
+                  final isMinus = saldo < 0;
                   return Text(
                     _formatRupiah(value.toInt()),
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: isMinus ? const Color(0xFFFF8A8A) : Colors.white,
                       fontSize: 28,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.5,
