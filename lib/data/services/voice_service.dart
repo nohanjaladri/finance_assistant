@@ -7,61 +7,27 @@ class VoiceService with ChangeNotifier {
   final FlutterTts _tts = FlutterTts();
   bool _isListening = false;
   bool get isListening => _isListening;
-  bool _isInitialized = false;
 
   Future<void> init() async {
-    try {
-      _isInitialized = await _speech.initialize(
-        debugLogging: true,
-        onError: (errorNotification) {
-          debugPrint('SpeechToText onError: ${errorNotification.errorMsg} - permanent: ${errorNotification.permanent}');
-          _isListening = false;
-          notifyListeners();
-        },
-        onStatus: (status) {
-          debugPrint('SpeechToText onStatus: $status');
-          if (status == 'done' || status == 'notListening') {
-            _isListening = false;
-            notifyListeners();
-          }
-        },
-      );
-      debugPrint('SpeechToText initialized successfully: $_isInitialized');
-      await _tts.setLanguage("id-ID");
-    } catch (e) {
-      debugPrint('SpeechToText initialization exception: $e');
-    }
+    await _speech.initialize();
+    await _tts.setLanguage("id-ID");
   }
 
   Future<void> startListening({
     required Function(String, bool) onResult,
   }) async {
-    if (!_isInitialized) {
-      debugPrint('SpeechToText not initialized. Re-initializing...');
-      await init();
-    }
-
     _isListening = true;
     notifyListeners();
-
-    try {
-      await _speech.listen(
-        onResult: (result) {
-          debugPrint('SpeechToText result: "${result.recognizedWords}" (final: ${result.finalResult})');
-          onResult(result.recognizedWords, result.finalResult);
-          if (result.finalResult) {
-            _isListening = false;
-            notifyListeners();
-          }
-        },
-        localeId: "id_ID", // Force Indonesian locale with underscore format (id_ID) as used in working commits
-        cancelOnError: false,
-      );
-    } catch (e) {
-      debugPrint('SpeechToText listen exception: $e');
-      _isListening = false;
-      notifyListeners();
-    }
+    await _speech.listen(
+      onResult: (result) {
+        onResult(result.recognizedWords, result.finalResult);
+        if (result.finalResult) {
+          _isListening = false;
+          notifyListeners();
+        }
+      },
+      localeId: "id-ID",
+    );
   }
 
   Future<void> stopListening() async {
