@@ -156,7 +156,7 @@ class _SttTestScreenState extends State<SttTestScreen> {
       // Setup recognizer options (optional, can enable grammar/words)
       _recognizer!.setWords(words: true);
       
-      _speechService = await _vosk.createSpeechService(_recognizer!);
+      _speechService = await _vosk.initSpeechService(_recognizer!);
       
       // Bind listeners
       _speechService!.onPartial().listen((partial) {
@@ -206,7 +206,9 @@ class _SttTestScreenState extends State<SttTestScreen> {
 
     _addLog("Mulai mendengarkan...");
     try {
-      final success = await _speechService!.start();
+      final success = await _speechService!.start(
+        onRecognitionError: (err) => _addLog("Vosk Error: $err"),
+      );
       setState(() {
         _isListening = success ?? false;
         _words = "";
