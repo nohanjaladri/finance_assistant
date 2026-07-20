@@ -13,7 +13,7 @@ class SttTestScreen extends StatefulWidget {
 }
 
 class _SttTestScreenState extends State<SttTestScreen> {
-  final Vosk _vosk = Vosk.instance;
+  final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance();
   Model? _model;
   Recognizer? _recognizer;
   SpeechService? _speechService;
@@ -154,7 +154,7 @@ class _SttTestScreenState extends State<SttTestScreen> {
       );
       
       // Setup recognizer options (optional, can enable grammar/words)
-      _recognizer!.setWords();
+      _recognizer!.setWords(words: true);
       
       _speechService = await _vosk.createSpeechService(_recognizer!);
       
