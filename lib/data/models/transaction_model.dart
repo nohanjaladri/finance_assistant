@@ -41,11 +41,11 @@ class TransactionItemModel {
 
   factory TransactionItemModel.fromJson(Map<String, dynamic> json) {
     return TransactionItemModel(
-      id: json['id'] as int?,
-      transactionId: json['transaction_id'] as int? ?? 0,
+      id: json['id'] is int ? json['id'] as int : (json['id'] as num?)?.toInt(),
+      transactionId: json['transaction_id'] is int ? json['transaction_id'] as int : (json['transaction_id'] as num?)?.toInt() ?? 0,
       note: json['note'] as String? ?? '',
-      amount: json['amount'] as int? ?? 0,
-      quantity: json['quantity'] as int? ?? 1,
+      amount: json['amount'] is int ? json['amount'] as int : (json['amount'] as num?)?.toInt() ?? 0,
+      quantity: json['quantity'] is int ? json['quantity'] as int : (json['quantity'] as num?)?.toInt() ?? 1,
     );
   }
 
@@ -121,13 +121,15 @@ class TransactionModel {
         itemsList = list
             .map((i) => TransactionItemModel.fromJson(i as Map<String, dynamic>))
             .toList();
-      } catch (_) {}
+      } catch (e, stack) {
+        debugPrint('Error parsing transaction_items list in TransactionModel.fromJson: $e\n$stack');
+      }
     }
     return TransactionModel(
       id: json['id'] as int?,
       userId: json['user_id'] as String? ?? '',
       roomId: json['room_id'] as String?,
-      amount: json['amount'] as int? ?? 0,
+      amount: json['amount'] is int ? json['amount'] as int : (json['amount'] as num?)?.toInt() ?? 0,
       note: json['note'] as String? ?? '',
       type: TransactionTypeExt.fromString(json['type'] as String?),
       category: json['category'] as String? ?? 'Other',
