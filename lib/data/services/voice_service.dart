@@ -54,7 +54,7 @@ class VoiceService with ChangeNotifier {
             notifyListeners();
           }
         },
-        localeId: "id-ID", // Force Indonesian locale so it doesn't default to system locale (e.g. en_US)
+        localeId: "id_ID", // Force Indonesian locale with underscore format (id_ID) as used in working commits
         cancelOnError: false,
       );
     } catch (e) {
