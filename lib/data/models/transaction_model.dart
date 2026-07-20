@@ -1,6 +1,5 @@
-/// transaction_model.dart
-/// Model utama untuk transaksi keuangan
-library;
+import 'package:flutter/foundation.dart';
+
 
 enum PaymentMethod { tunai, nonTunai }
 
@@ -114,6 +113,13 @@ class TransactionModel {
   }
 
   factory TransactionModel.fromJson(Map<String, dynamic> json) {
+    debugPrint('TransactionModel.fromJson: id=${json['id']}, note="${json['note']}", keys=${json.keys.toList()}');
+    if (json['transaction_items'] != null) {
+      debugPrint('transaction_items type: ${json['transaction_items'].runtimeType}, data: ${json['transaction_items']}');
+    } else {
+      debugPrint('transaction_items is NULL for transaction id=${json['id']}');
+    }
+    
     var itemsList = <TransactionItemModel>[];
     if (json['transaction_items'] != null) {
       try {
