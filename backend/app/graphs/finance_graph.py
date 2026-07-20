@@ -210,6 +210,12 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     intent = state.get("intent")
     extracted_data = state.get("extracted_data") or {}
     user_id = state.get("user_id", "default_user")
+    import uuid
+    try:
+        uuid.UUID(user_id)
+    except (ValueError, TypeError):
+        user_id = "0c732da4-39e4-45f1-8a64-984d66baadf0"
+        
     last_message = state["messages"][-1]["content"] if state["messages"] else ""
     
     # Initialize current execution logs

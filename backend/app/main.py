@@ -26,6 +26,12 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(payload: ChatRequest):
+    import uuid
+    try:
+        uuid.UUID(payload.user_id)
+    except (ValueError, TypeError):
+        payload.user_id = "0c732da4-39e4-45f1-8a64-984d66baadf0"
+        
     try:
         messages_state = []
         

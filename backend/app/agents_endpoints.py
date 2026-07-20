@@ -109,6 +109,12 @@ class AnalystSimulationResponse(BaseModel):
 
 @router.post("/analyst", response_model=AnalystSimulationResponse)
 async def simulate_analyst_agent(payload: AgentSimulationRequest):
+    import uuid
+    try:
+        uuid.UUID(payload.user_id)
+    except (ValueError, TypeError):
+        payload.user_id = "0c732da4-39e4-45f1-8a64-984d66baadf0"
+
     logs = ["[Analyst Agent Simulator] Menerima kueri analisis."]
     sql_query = ""
     results = []
@@ -170,6 +176,12 @@ class BudgetSimulationResponse(BaseModel):
 
 @router.get("/budget/{user_id}", response_model=BudgetSimulationResponse)
 async def simulate_budget_agent(user_id: str):
+    import uuid
+    try:
+        uuid.UUID(user_id)
+    except (ValueError, TypeError):
+        user_id = "0c732da4-39e4-45f1-8a64-984d66baadf0"
+
     logs = ["[Budget Agent Simulator] Menerima permintaan evaluasi limit anggaran."]
     db = SessionLocal()
     spent = 0
