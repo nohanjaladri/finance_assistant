@@ -115,6 +115,131 @@ class _AgentSimulatorViewState extends State<AgentSimulatorView> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 900;
+
+    Widget leftContent = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildAgentOverviewCard(),
+        const SizedBox(height: 20),
+        if (widget.agentType != "Budget") ...[
+          const Text(
+            "Masukkan Simulasi Perintah",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _inputController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: _getHintText(),
+                    hintStyle: const TextStyle(color: Colors.white30),
+                    fillColor: const Color(0xFF1E293B),
+                    filled: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: Colors.white12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _runSimulation,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.all(16),
+                  backgroundColor: Colors.blueAccent,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: _isLoading
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Icon(Icons.send, color: Colors.white),
+              ),
+            ],
+          ),
+        ] else ...[
+          ElevatedButton.icon(
+            onPressed: _isLoading ? null : _runSimulation,
+            icon: const Icon(Icons.refresh, color: Colors.white),
+            label: const Text("Mulai Evaluasi Keuangan", style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+              backgroundColor: Colors.green,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ],
+        const SizedBox(height: 25),
+        const Text(
+          "Simulated Output Visual",
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+        const SizedBox(height: 12),
+        _buildOutputVisualizer(),
+      ],
+    );
+
+    Widget rightContent = Container(
+      color: const Color(0xFF070B14),
+      padding: const EdgeInsets.all(15),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "🤖 Agent Execution Log",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent),
+          ),
+          const SizedBox(height: 5),
+          const Text(
+            "Runtutan alur pikir dan aksi yang dikerjakan oleh agen:",
+            style: TextStyle(fontSize: 11, color: Colors.white54),
+          ),
+          const SizedBox(height: 15),
+          _simLogs.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Center(
+                    child: Text(
+                      "Belum ada logs. Mulai simulasi untuk melihat langkah agen.",
+                      style: TextStyle(color: Colors.white30, fontSize: 13),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _simLogs.length,
+                  itemBuilder: (context, index) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12.0),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("• ", style: TextStyle(color: Colors.greenAccent, fontSize: 16)),
+                          Expanded(
+                            child: Text(
+                              _simLogs[index],
+                              style: const TextStyle(
+                                color: Color(0xE6FFFFFF),
+                                fontSize: 13,
+                                fontFamily: "monospace",
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        ],
+      ),
+    );
+
     return Scaffold(
       backgroundColor: const Color(0xFF0F172A),
       appBar: AppBar(
@@ -123,134 +248,82 @@ class _AgentSimulatorViewState extends State<AgentSimulatorView> {
         iconTheme: const IconThemeData(color: Colors.white),
         elevation: 0,
       ),
-      body: Row(
-        key: const ValueKey("simulators_row"),
-        children: [
-          // Left side: Simulation inputs and outputs (Visuals)
-          Expanded(
-            flex: 6,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20.0),
+      body: isMobile
+          ? SingleChildScrollView(
+              padding: const EdgeInsets.all(15.0),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildAgentOverviewCard(),
+                  leftContent,
                   const SizedBox(height: 20),
-                  if (widget.agentType != "Budget") ...[
-                    const Text(
-                      "Masukkan Simulasi Perintah",
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: rightContent,
+                  ),
+                ],
+              ),
+            )
+          : Row(
+              key: const ValueKey("simulators_row"),
+              children: [
+                Expanded(
+                  flex: 6,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(20.0),
+                    child: leftContent,
+                  ),
+                ),
+                Expanded(
+                  flex: 4,
+                  child: Container(
+                    color: const Color(0xFF070B14),
+                    padding: const EdgeInsets.all(15),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _inputController,
-                            style: const TextStyle(color: Colors.white),
-                            decoration: InputDecoration(
-                              hintText: _getHintText(),
-                              hintStyle: const TextStyle(color: Colors.white30),
-                              fillColor: const Color(0xFF1E293B),
-                              filled: true,
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(color: Colors.white12),
-                              ),
-                            ),
-                          ),
+                        const Text(
+                          "🤖 Agent Execution Log",
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent),
                         ),
-                        const SizedBox(width: 10),
-                        ElevatedButton(
-                          onPressed: _isLoading ? null : _runSimulation,
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.all(16),
-                            backgroundColor: Colors.blueAccent,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: _isLoading
-                              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                              : const Icon(Icons.send, color: Colors.white),
+                        const SizedBox(height: 5),
+                        const Text(
+                          "Runtutan alur pikir dan aksi yang dikerjakan oleh agen:",
+                          style: TextStyle(fontSize: 11, color: Colors.white54),
+                        ),
+                        const SizedBox(height: 15),
+                        Expanded(
+                          child: _simLogs.isEmpty
+                              ? const Center(child: Text("Belum ada logs. Mulai simulasi untuk melihat langkah agen.", style: TextStyle(color: Colors.white30, fontSize: 13), textAlign: TextAlign.center))
+                              : ListView.builder(
+                                  itemCount: _simLogs.length,
+                                  itemBuilder: (context, index) {
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12.0),
+                                      child: Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text("• ", style: TextStyle(color: Colors.greenAccent, fontSize: 16)),
+                                          Expanded(
+                                            child: Text(
+                                              _simLogs[index],
+                                              style: const TextStyle(
+                                                color: Color(0xE6FFFFFF),
+                                                fontSize: 13,
+                                                fontFamily: "monospace",
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
                         ),
                       ],
                     ),
-                  ] else ...[
-                    ElevatedButton.icon(
-                      onPressed: _isLoading ? null : _runSimulation,
-                      icon: const Icon(Icons.refresh, color: Colors.white),
-                      label: const Text("Mulai Evaluasi Keuangan", style: TextStyle(color: Colors.white)),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                        backgroundColor: Colors.green,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 25),
-                  const Text(
-                    "Simulated Output Visual",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
                   ),
-                  const SizedBox(height: 12),
-                  _buildOutputVisualizer(),
-                ],
-              ),
+                ),
+              ],
             ),
-          ),
-          
-          // Right side: Logs / Execution Steps (The "Thoughts" of the agent)
-          Expanded(
-            flex: 4,
-            child: Container(
-              color: const Color(0xFF070B14),
-              padding: const EdgeInsets.all(15),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "🤖 Agent Execution Log",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent),
-                  ),
-                  const SizedBox(height: 5),
-                  const Text(
-                    "Runtutan alur pikir dan aksi yang dikerjakan oleh agen:",
-                    style: TextStyle(fontSize: 11, color: Colors.white54),
-                  ),
-                  const SizedBox(height: 15),
-                  Expanded(
-                    child: _simLogs.isEmpty
-                        ? const Center(child: Text("Belum ada logs. Mulai simulasi untuk melihat langkah agen.", style: TextStyle(color: Colors.white30, fontSize: 13), textAlign: TextAlign.center))
-                        : ListView.builder(
-                            itemCount: _simLogs.length,
-                            itemBuilder: (context, index) {
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 12.0),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text("• ", style: TextStyle(color: Colors.greenAccent, fontSize: 16)),
-                                    Expanded(
-                                      child: Text(
-                                        _simLogs[index],
-                                        style: const TextStyle(
-                                          color: Color(0xE6FFFFFF),
-                                          fontSize: 13,
-                                          fontFamily: "monospace",
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          )
-        ],
-      ),
     );
   }
 
@@ -345,17 +418,20 @@ class _AgentSimulatorViewState extends State<AgentSimulatorView> {
           children: [
             const Text("LangGraph Node Execution Flowchart", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold)),
             const SizedBox(height: 25),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildFlowBox("User Input", Colors.grey[700]!),
-                const Icon(Icons.arrow_forward, color: Colors.white54),
-                _buildFlowBox("detect_intent\n(Orchestrator)", Colors.blueAccent),
-                const Icon(Icons.arrow_forward, color: Colors.white54),
-                _buildFlowBox("tool_executor\n(Spec. Agents)", Colors.purple),
-                const Icon(Icons.arrow_forward, color: Colors.white54),
-                _buildFlowBox("Database / User Response", Colors.green),
-              ],
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildFlowBox("User Input", Colors.grey[700]!),
+                  const Icon(Icons.arrow_forward, color: Colors.white54),
+                  _buildFlowBox("detect_intent\n(Orchestrator)", Colors.blueAccent),
+                  const Icon(Icons.arrow_forward, color: Colors.white54),
+                  _buildFlowBox("tool_executor\n(Spec. Agents)", Colors.purple),
+                  const Icon(Icons.arrow_forward, color: Colors.white54),
+                  _buildFlowBox("Database / User Response", Colors.green),
+                ],
+              ),
             ),
             const SizedBox(height: 25),
             const Text("Status: READY FOR QUERY SIMULATION", style: TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
