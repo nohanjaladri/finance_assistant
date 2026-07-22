@@ -190,6 +190,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           }
         }
 
+        // Check if response used rule-based fallback
+        final isFallback = response.logs.any((log) => log.contains('Fallback') || log.contains('rule-based'));
+        if (isFallback && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("LLM Limit/Offline: Menggunakan Parsing Rule-Based Lokal"),
+              backgroundColor: Colors.amber,
+              behavior: SnackBarBehavior.floating,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+
         if (response.intent == 'ADD_EXPENSE' || response.intent == 'ADD_INCOME') {
           final itemsList = (response.extractedData['items'] as List<dynamic>?) ??
               (response.extractedData['transactions'] as List<dynamic>?) ??

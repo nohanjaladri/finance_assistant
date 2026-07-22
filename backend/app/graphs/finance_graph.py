@@ -359,10 +359,11 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
         }
         
     conf_val = extracted_data.get("confidence_score", 1.0)
+    logs.append(f"[Orchestrator (Fallback)] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{intent}' (Confidence: {int(conf_val * 100)}%).")
     return {
         "intent": intent,
         "extracted_data": extracted_data,
-        "logs": [f"[Orchestrator (Fallback)] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{intent}' (Confidence: {int(conf_val * 100)}%)."]
+        "logs": logs
     }
 
 def _ensure_sir_suffix(text: str) -> str:
@@ -792,15 +793,26 @@ def _internal_tool_executor(state: AgentState) -> Dict[str, Any]:
         return {"response": response_msg, "logs": current_logs, "extracted_data": extracted_data}
     else:
         current_logs.append("[Conversation Agent] Menjawab pesan obrolan umum/sapaan pengguna.")
-        response_msg = "Halo! Ada yang bisa saya bantu dengan keuangan Anda?"
-        if llm:
-            prompt = (
-                f"Pesan Pengguna: '{last_message}'\n\n"
-                f"Tugas Anda: Jawab pesan pengguna secara alami, ramah, santai, dan ringkas dalam bahasa Indonesia untuk membantunya mengelola keuangan. "
-                f"Jika pesan pengguna tidak jelas nominal transaksinya, ingatkan mereka secara sopan untuk memberikan nominal agar bisa dicatat."
-            )
-            llm_response = llm.invoke(prompt)
-            response_msg = llm_response.content
+        response_msg = "Halo! Ada yang bisa saya bantu dengan keuangan Anda, Sir?"
+        if settings.GROQ_API_KEY:
+            for model_name in GROQ_MODELS:
+                try:
+                    chat_llm = ChatGroq(
+                        model=model_name,
+                        api_key=settings.GROQ_API_KEY,
+                        temperature=0.7
+                    )
+                    prompt = (
+                        f"Pesan Pengguna: '{last_message}'\n\n"
+                        f"Tugas Anda: Jawab pesan pengguna secara alami, ramah, santai, dan ringkas dalam bahasa Indonesia untuk membantunya mengelola keuangan. "
+                        f"PENTING: Panggil pengguna dengan sebutan 'Sir' dan akhiri jawaban dengan ', Sir.'."
+                    )
+                    llm_response = chat_llm.invoke(prompt)
+                    response_msg = llm_response.content
+                    break
+                except Exception as e:
+                    logging.warning(f"General chat LLM model '{model_name}' failed: {e}")
+                    continue
         
     return {"response": response_msg, "logs": current_logs}
 
