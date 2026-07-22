@@ -9,11 +9,81 @@ from app.database.session import SessionLocal
 from app.models.models import Transaction, TransactionItem
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
+# Helper 1: Indonesian Slang Currency Normalizer (1,5jt, 50k, 1 juta 250 ribu, setengah juta, dll.)
+def normalize_indonesian_amount(val_or_str: Any) -> int:
+    if isinstance(val_or_str, (int, float)):
+        return int(val_or_str)
+    if not val_or_str:
+        return 0
+        
+    s = str(val_or_str).lower().strip()
+    s = s.replace("rp", "").replace(".", "").replace(",", ".").strip()
+    
+    if "setengah juta" in s or "0.5 juta" in s or "0,5 juta" in s:
+        return 500000
+    if s in ["sejuta", "1 juta"]:
+        return 1000000
+    if s in ["seribu", "1 ribu", "1rb"]:
+        return 1000
+
+    total_val = 0
+    m_juta = re.search(r'(\d+(?:\.\d+)?)\s*(?:jt|juta)', s)
+    if m_juta:
+        total_val += int(float(m_juta.group(1)) * 1000000)
+        s = s.replace(m_juta.group(0), '')
+        
+    m_ribu = re.search(r'(\d+(?:\.\d+)?)\s*(?:k|rb|ribu|rebu)', s)
+    if m_ribu:
+        total_val += int(float(m_ribu.group(1)) * 1000)
+        s = s.replace(m_ribu.group(0), '')
+        
+    m_ratus = re.search(r'(\d+(?:\.\d+)?)\s*(?:ratus)', s)
+    if m_ratus:
+        total_val += int(float(m_ratus.group(1)) * 100)
+        s = s.replace(m_ratus.group(0), '')
+        
+    m_rem = re.search(r'\b(\d+)\b', s)
+    if m_rem and total_val == 0:
+        total_val += int(m_rem.group(1))
+    elif m_rem and total_val > 0:
+        rem_digit = int(m_rem.group(1))
+        if rem_digit < 1000:
+            total_val += rem_digit
+
+    if total_val > 0:
+        return total_val
+        
+    try:
+        clean_num = re.sub(r'[^\d]', '', str(val_or_str))
+        if clean_num:
+            return int(clean_num)
+    except Exception:
+        pass
+    return 0
+
+# Helper 2: Relative & Retroactive Past Date Parser
+def parse_retroactive_date(msg_text: str):
+    import datetime
+    now = datetime.datetime.now()
+    msg_lower = msg_text.lower()
+    
+    if "kemarin lusa" in msg_lower or "2 hari lalu" in msg_lower:
+        return now - datetime.timedelta(days=2)
+    elif "kemarin" in msg_lower or "1 hari lalu" in msg_lower:
+        return now - datetime.timedelta(days=1)
+    elif "3 hari lalu" in msg_lower:
+        return now - datetime.timedelta(days=3)
+    elif "seminggu lalu" in msg_lower or "1 minggu lalu" in msg_lower:
+        return now - datetime.timedelta(days=7)
+        
+    return now
+
 # Define Pydantic Schema for extraction
 class TransactionItemExtraction(BaseModel):
     note: str = Field(description="Nama barang atau catatan item spesifik. Contoh: 'bakso', 'es teh'.")
-    amount: Optional[int] = Field(default=0, description="Nominal harga untuk item ini. Contoh: 15000. Isikan 0 atau null jika tidak disebutkan.")
+    amount: Optional[Any] = Field(default=0, description="Nominal harga untuk item ini (bisa angka atau teks slang seperti '15k', '1.5jt').")
     quantity: int = Field(default=1, description="Jumlah item yang dibeli.")
+    item_type: Optional[str] = Field(default="OUT", description="Tipe item ini: 'OUT' untuk pengeluaran, 'IN' untuk pemasukan/gaji.")
 
 class TransactionExtraction(BaseModel):
     intent: str = Field(
@@ -74,6 +144,30 @@ if settings.GROQ_API_KEY:
     except Exception as e:
         logging.warning(f"Failed to initialize ChatGroq: {e}")
 
+def _build_default_sql_query(msg_text: str) -> str:
+    msg_lower = msg_text.lower()
+    tx_type = "IN" if "pemasukan" in msg_lower else "OUT"
+    
+    if "hari ini" in msg_lower:
+        time_clause = "t.created_at::date = CURRENT_DATE"
+    elif "minggu ini" in msg_lower or "mingguan" in msg_lower:
+        time_clause = "t.created_at >= DATE_TRUNC('week', CURRENT_DATE)"
+    else:
+        time_clause = "t.created_at >= DATE_TRUNC('month', CURRENT_DATE)"
+
+    return (
+        f"SELECT COALESCE(ti.note, t.note) AS item, "
+        f"COALESCE(ti.quantity, 1) AS jumlah, "
+        f"COALESCE(ti.amount, t.amount) AS harga_satuan, "
+        f"(COALESCE(ti.amount, t.amount) * COALESCE(ti.quantity, 1)) AS total_harga, "
+        f"t.category AS kategori, "
+        f"t.created_at::date AS tanggal "
+        f"FROM transactions t "
+        f"LEFT JOIN transaction_items ti ON t.id = ti.transaction_id "
+        f"WHERE t.user_id = :user_id AND t.type = '{tx_type}' AND {time_clause} "
+        f"ORDER BY t.created_at DESC"
+    )
+
 # 1. Detect Intent Node
 def detect_intent_node(state: AgentState) -> Dict[str, Any]:
     last_message = state["messages"][-1]["content"] if state["messages"] else ""
@@ -93,7 +187,7 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "- 'ADD_EXPENSE': untuk pencatatan pengeluaran baru.\n"
                     "- 'ADD_INCOME': untuk pencatatan pemasukan baru.\n"
                     "- 'UNDO': untuk membatalkan/menghapus transaksi terakhir yang baru saja dicatat.\n"
-                    "- 'QUERY': untuk menanyakan/menganalisis riwayat transaksi keuangan mereka sendiri (misal: total belanja, pengeluaran kategori tertentu, list belanja terbesar, dll).\n"
+                    "- 'QUERY': untuk menanyakan/menganalisis riwayat transaksi keuangan mereka sendiri (misal: 'berapa pengeluaran hari ini', 'pengeluaran bulan ini', total belanja, pengeluaran kategori tertentu, list belanja terbesar, dll).\n"
                     "- 'APPEND_ITEM': jika pengguna ingin menambahkan item baru ke transaksi belanjaan yang paling terakhir dicatat (misal: 'tambahkan es jeruk 5000', 'eh masukkan es teh 3000 juga ke belanjaan tadi').\n"
                     "- 'MODIFY_LAST': jika pengguna ingin mengubah/merevisi detail transaksi terakhir yang baru saja diinput (misal: 'ganti harganya jadi 12000', 'harganya salah, harusnya 15000').\n"
                     "- 'GENERAL': untuk sapaan, pertanyaan umum non-finansial, atau percakapan biasa.\n\n"
@@ -145,19 +239,32 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "quantity": item.quantity
                 })
             conf_val = extracted.confidence_score if extracted.confidence_score is not None else 1.0
+
+            intent = extracted.intent
+            sql_q = extracted.sql_query
+            msg_lower = last_message.lower()
+
+            # Override intent to QUERY if user message is asking for financial history/totals
+            query_kws = ["berapa", "pengeluaran", "pemasukan", "total", "riwayat", "daftar", "rincian", "list"]
+            if any(kw in msg_lower for kw in query_kws) and not any(kw in msg_lower for kw in ["beli", "bayar", "terima", "gaji"]):
+                intent = "QUERY"
+
+            if intent == "QUERY" and (not sql_q or "SELECT" not in sql_q.upper()):
+                sql_q = _build_default_sql_query(last_message)
+
             return {
-                "intent": extracted.intent,
+                "intent": intent,
                 "extracted_data": {
                     "category": extracted.category or "Other",
                     "payment_method": extracted.payment_method or "tunai",
-                    "type": extracted.type or ("OUT" if extracted.intent == "ADD_EXPENSE" else "IN"),
+                    "type": extracted.type or ("OUT" if intent == "ADD_EXPENSE" else "IN"),
                     "items": items_list,
-                    "sql_query": extracted.sql_query,
+                    "sql_query": sql_q,
                     "confidence_score": conf_val,
                     "is_ambiguous": extracted.is_ambiguous if extracted.is_ambiguous is not None else False,
                     "clarification_question": extracted.clarification_question
                 },
-                "logs": [f"[Orchestrator] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{extracted.intent}' (Confidence: {int(conf_val * 100)}%)."]
+                "logs": [f"[Orchestrator] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{intent}' (Confidence: {int(conf_val * 100)}%)."]
             }
         except Exception as e:
             logging.error(f"LLM extraction error: {e}. Falling back to rule-based.")
@@ -214,6 +321,19 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             "is_ambiguous": False if amount > 0 else True,
             "clarification_question": None if amount > 0 else "Berapa nominal pendapatan Anda?"
         }
+    elif any(kw in last_message.lower() for kw in ["pengeluaran", "pemasukan", "total", "riwayat", "daftar", "rincian", "list", "berapa", "transaksi"]):
+        intent = "QUERY"
+        sql_q = _build_default_sql_query(last_message)
+        extracted_data = {
+            "category": "Other",
+            "payment_method": "tunai",
+            "type": "OUT",
+            "items": [],
+            "sql_query": sql_q,
+            "confidence_score": 1.0,
+            "is_ambiguous": False,
+            "clarification_question": None
+        }
         
     conf_val = extracted_data.get("confidence_score", 1.0)
     return {
@@ -255,19 +375,37 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             current_logs.append("[Entry Agent] Gagal memproses: tidak menemukan item detail belanja.")
             return {"response": "Maaf, saya tidak menemukan item transaksi dalam pesan Anda.", "logs": current_logs}
             
+        # 1. Normalize slang amounts (1,5jt, 50k, 50rb, setengah juta, dll.)
+        for item in items_data:
+            item["amount"] = normalize_indonesian_amount(item.get("amount"))
+
+        # 2. Check for partial missing amounts in multi-item input (e.g. "Beli bakso 15rb, es teh, kerupuk")
+        missing_amount_items = [item.get("note", "item") for item in items_data if item.get("amount", 0) <= 0]
+        if missing_amount_items:
+            missing_str = ", ".join(missing_amount_items)
+            current_logs.append(f"[Entry Agent] Terdeteksi item tanpa harga: [{missing_str}]. Mengirimkan pertanyaan klarifikasi.")
+            return {
+                "response": f"Berapa nominal harga untuk **{missing_str}** yang Anda beli?",
+                "logs": current_logs,
+                "extracted_data": extracted_data
+            }
+
         total_amount = sum(item.get("amount", 0) * item.get("quantity", 1) for item in items_data)
         if total_amount <= 0:
             current_logs.append("[Entry Agent] Gagal memproses: nominal belanja nol.")
             return {"response": "Maaf, saya tidak dapat mencatat transaksi jika nominalnya kosong atau nol. Silakan sebutkan jumlah uangnya secara jelas.", "logs": current_logs}
             
+        # 3. Parse relative retroactive date (kemarin, kemarin lusa, 2 hari lalu, dsb.)
+        tx_created_at = parse_retroactive_date(last_message)
+
         # Create summary note for parent Transaction
         note_summary = ", ".join(f"{item.get('note')}" for item in items_data)
         category = extracted_data.get("category") or "Other"
         pm = extracted_data.get("payment_method") or "tunai"
         tx_type = "OUT" if intent == "ADD_EXPENSE" else "IN"
         
-        current_logs.append(f"[Entry Agent] Membuka koneksi database untuk merekam transaksi {tx_type.lower()} sebesar Rp {total_amount}.")
-        # Save to DB
+        current_logs.append(f"[Entry Agent] Membuka koneksi database untuk merekam transaksi {tx_type.lower()} sebesar Rp {total_amount} (Tanggal: {tx_created_at.strftime('%Y-%m-%d')}).")
+        # Save to DB with retroactive created_at
         db = SessionLocal()
         try:
             tx = Transaction(
@@ -276,7 +414,8 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 amount=total_amount,
                 category=category,
                 type=tx_type,
-                payment_method=pm
+                payment_method=pm,
+                created_at=tx_created_at
             )
             db.add(tx)
             db.flush()
@@ -466,6 +605,19 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             db.close()
             
     elif intent == "QUERY":
+        # Check if user message lacks explicit time specification (e.g., "pengeluaran saya banyak gak?")
+        time_kws = ["hari ini", "minggu ini", "bulan ini", "bulan", "minggu", "hari", "tahun", "kemarin", "tgl", "tanggal", "januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus", "september", "oktober", "november", "desember"]
+        has_time_spec = any(kw in last_message.lower() for kw in time_kws)
+
+        if not has_time_spec and (extracted_data.get("is_ambiguous") or not extracted_data.get("clarification_question")):
+            extracted_data["is_ambiguous"] = True
+            extracted_data["clarification_question"] = "Apakah Anda ingin melihat analisis pengeluaran untuk **hari ini**, **minggu ini**, atau **bulan ini**?"
+
+        if extracted_data.get("is_ambiguous") and extracted_data.get("clarification_question"):
+            clarification_msg = extracted_data["clarification_question"]
+            current_logs.append(f"[Analyst Agent] Kueri ambigu (tanpa rentang waktu). Mengirimkan pertanyaan klarifikasi: \"{clarification_msg}\".")
+            return {"response": clarification_msg, "logs": current_logs, "extracted_data": extracted_data}
+
         sql_query = extracted_data.get("sql_query")
         if not sql_query:
             current_logs.append("[Analyst Agent] Gagal: SQL query tidak dihasilkan oleh model.")
