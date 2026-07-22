@@ -105,7 +105,7 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
                     "PENTING: Selalu masukkan filter `user_id = :user_id` di klausa WHERE agar data aman dan terisolasi.\n"
                     "PENTING: Untuk filter waktu/tanggal, gunakan PostgreSQL date functions berikut agar sangat akurat:\n"
-                    "                    "  - Harian (hari ini): `created_at::date = CURRENT_DATE` atau group by `created_at::date`\n"
+                    "  - Harian (hari ini): `created_at::date = CURRENT_DATE` atau group by `created_at::date`\n"
                     "  - Mingguan (minggu ini): `created_at >= DATE_TRUNC('week', CURRENT_DATE)` atau group by `DATE_TRUNC('week', created_at)`\n"
                     "  - Bulanan (bulan ini): `created_at >= DATE_TRUNC('month', CURRENT_DATE)` atau group by `DATE_TRUNC('month', created_at)`\n"
                     "  - PENTING: Jika membandingkan created_at dengan string tanggal statis (misal '2024-06-01'), Anda HARUS melakukan type cast secara eksplisit seperti `'2024-06-01'::timestamp` atau `'2024-06-01'::date` (misal: `DATE_TRUNC('month', '2024-06-01'::timestamp)`), karena tanpa cast PostgreSQL akan menghasilkan error 'date_trunc(unknown, unknown) is not unique'.\n"
