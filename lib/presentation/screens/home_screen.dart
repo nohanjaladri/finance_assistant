@@ -233,6 +233,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       } else {
         await finance.addMessage("Maaf, gagal terhubung ke backend AI.", true);
         finance.addDebugLog("Error: Backend returned null response");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Gagal terhubung ke AI (Backend Response Null)."),
+              backgroundColor: Colors.redAccent,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       }
     } catch (e) {
       debugPrint("Error sending message to backend: $e");
@@ -241,6 +250,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         "Terjadi kesalahan sistem saat menghubungi AI.",
         true,
       );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Error Sistem: $e"),
+            backgroundColor: Colors.redAccent,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
     } finally {
       finance.setAiThinking(false);
       _scrollChatToBottom();

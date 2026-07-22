@@ -132,17 +132,37 @@ class AgentState(TypedDict):
     response: Optional[str]
     logs: List[str]
 
-# Initialize LLM
-llm = None
-if settings.GROQ_API_KEY:
-    try:
-        llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=settings.GROQ_API_KEY,
-            temperature=0.0
-        )
-    except Exception as e:
-        logging.warning(f"Failed to initialize ChatGroq: {e}")
+# Initialize LLM Models with Tiered Routing / Fallback
+# Primary: llama-3.1-8b-instant (Super Cepat & Limit 14.400 RPD)
+# Backup 1: llama-3.3-70b-versatile (Smart Reasoning & Limit 1.000 RPD)
+# Backup 2: mixtral-8x7b-32768 (High Throughput & Limit 14.400 RPD)
+GROQ_MODELS = [
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "mixtral-8x7b-32768"
+]
+
+def invoke_llm_with_fallback(chat_history: list, pydantic_schema: Any, logs_list: list) -> Optional[Any]:
+    if not settings.GROQ_API_KEY:
+        return None
+        
+    for model_name in GROQ_MODELS:
+        try:
+            model_llm = ChatGroq(
+                model=model_name,
+                api_key=settings.GROQ_API_KEY,
+                temperature=0.0
+            ).with_structured_output(pydantic_schema)
+            
+            result = model_llm.invoke(chat_history)
+            logs_list.append(f"[Orchestrator] Diproses menggunakan model LLM Groq: '{model_name}'.")
+            return result
+        except Exception as e:
+            logging.warning(f"Groq LLM model '{model_name}' failed/limited: {e}. Trying next fallback model...")
+            logs_list.append(f"[LLM Warning] Model '{model_name}' limit/error ({e}). Mengalihkan ke model cadangan...")
+            continue
+            
+    return None
 
 def _build_default_sql_query(msg_text: str) -> str:
     msg_lower = msg_text.lower()
@@ -173,106 +193,104 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
     last_message = state["messages"][-1]["content"] if state["messages"] else ""
     import datetime
     current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logs = []
     
-    # Try using Groq if available
-    if llm:
-        try:
-            chat_history = [
-                SystemMessage(content=(
-                    "Anda adalah asisten keuangan pribadi cerdas bernama Dompetku AI yang melayani pengguna bagaikan JARVIS.\n"
-                    "PENTING / PERATURAN PERSONA SIR:\n"
-                    "1. Selalu panggil pengguna dengan sebutan 'Sir'.\n"
-                    "2. Selalu akhiri setiap respon atau pertanyaan Anda dengan kata ', Sir.' atau ', Sir?' (Contoh: 'Berhasil mencatat pengeluaran Anda, Sir.' atau 'Berapa harga baksonya, Sir?').\n\n"
-                    f"Waktu Sekarang: {current_time_str} (PENTING: Gunakan ini sebagai acuan tahun/tanggal saat ini saat menganalisis kueri waktu pengguna seperti 'bulan juni', 'minggu lalu', dsb. Selalu asumsikan tahun saat ini sesuai tahun sekarang kecuali pengguna menyebutkan tahun lain secara spesifik).\n"
-                    "Tugas Anda adalah mendeteksi intent pengguna dan mengekstrak informasi detail item transaksi atau menghasilkan query database.\n"
-                    "Pahami konteks percakapan sebelumnya untuk kalimat rujukan atau kalimat lanjutan (follow-up) dari pengguna.\n"
-                    "PILIHAN INTENT:\n"
-                    "- 'ADD_EXPENSE': untuk pencatatan pengeluaran baru.\n"
-                    "- 'ADD_INCOME': untuk pencatatan pemasukan baru.\n"
-                    "- 'UNDO': untuk membatalkan/menghapus transaksi terakhir yang baru saja dicatat.\n"
-                    "- 'QUERY': untuk menanyakan/menganalisis riwayat transaksi keuangan mereka sendiri (misal: 'berapa pengeluaran hari ini', 'pengeluaran bulan ini', total belanja, pengeluaran kategori tertentu, list belanja terbesar, dll).\n"
-                    "- 'APPEND_ITEM': jika pengguna ingin menambahkan item baru ke transaksi belanjaan yang paling terakhir dicatat (misal: 'tambahkan es jeruk 5000', 'eh masukkan es teh 3000 juga ke belanjaan tadi').\n"
-                    "- 'MODIFY_LAST': jika pengguna ingin mengubah/merevisi detail transaksi terakhir yang baru saja diinput (misal: 'ganti harganya jadi 12000', 'harganya salah, harusnya 15000').\n"
-                    "- 'GENERAL': untuk sapaan, pertanyaan umum non-finansial, atau percakapan biasa.\n\n"
-                    "Aturan Memori Konteks:\n"
-                    "- Jika pesan terakhir pengguna adalah kelanjutan transaksi (misal: 'sama es teh 5000' setelah membeli bakso),\n"
-                    "  pilih intent 'APPEND_ITEM' jika itu berupa tambahan item baru untuk transaksi terakhir, lalu ekstrak detail item tersebut.\n"
-                    "- Jika pesan terakhir bertujuan untuk merevisi nominal transaksi terakhir (misal: 'eh harganya salah, harusnya 15000'), pilih intent 'MODIFY_LAST' dan ekstrak nominal baru tersebut di bagian items.\n"
-                    "- Jika pengguna mengetik kata seperti 'batal', 'cancel', atau 'undo', ubah intent menjadi 'UNDO'.\n\n"
-                    "Aturan QUERY:\n"
-                    "Jika intent adalah 'QUERY', hasilkan query SQL SELECT PostgreSQL yang valid di bidang 'sql_query'.\n"
-                    "Query HANYA boleh mengakses tabel 'transactions' (t) dan 'transaction_items' (ti).\n"
-                    "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
-                    "Kolom tabel 'transaction_items' adalah: id, transaction_id, note, amount, quantity.\n"
-                    "PENTING: Selalu masukkan filter `t.user_id = :user_id` di klausa WHERE agar data aman dan terisolasi.\n"
-                    "PENTING / DILARANG KERAS: DILARANG MENGGUNAKAN FUNGSI `SUM()` atau `GROUP BY` jika pengguna menanyakan 'apa saja', 'daftar', 'rincian', 'riwayat', 'pengeluaran bulan ini', 'transaksi hari ini', atau 'list belanja'. HANYA gunakan `SUM()` JIKA DAN HANYA JIKA pengguna secara eksplisit meminta 'berapa total...'.\n"
-                    "PENTING: Jika pengguna meminta daftar/rincian transaksi (misal: 'pengeluaran bulan ini', 'transaksi hari ini', 'list belanja minggu ini', 'apa saja pengeluaran saya'):\n"
-                    "  - Gunakan LEFT JOIN antara `transactions t` dan `transaction_items ti ON t.id = ti.transaction_id`.\n"
-                    "  - Pilih kolom dengan alias yang jelas: `COALESCE(ti.note, t.note) AS item`, `COALESCE(ti.quantity, 1) AS jumlah`, `COALESCE(ti.amount, t.amount) AS harga_satuan`, `(COALESCE(ti.amount, t.amount) * COALESCE(ti.quantity, 1)) AS total_harga`, `t.category AS kategori`, `t.created_at::date AS tanggal`.\n"
-                    "  - DILARANG MENGGUNAKAN `SUM()` di sini! Pilih setiap baris transaksi secara individual agar tabel di UI menampilkan daftar item secara rinci.\n"
-                    "PENTING: Untuk filter waktu/tanggal, gunakan PostgreSQL date functions berikut agar sangat akurat:\n"
-                    "  - Harian (hari ini): `t.created_at::date = CURRENT_DATE`\n"
-                    "  - Mingguan (minggu ini): `t.created_at >= DATE_TRUNC('week', CURRENT_DATE)`\n"
-                    "  - Bulanan (bulan ini): `t.created_at >= DATE_TRUNC('month', CURRENT_DATE)`\n"
-                    "  - PENTING: Jika membandingkan created_at dengan string tanggal statis (misal '2024-06-01'), Anda HARUS melakukan type cast secara eksplisit seperti `'2024-06-01'::timestamp` atau `'2024-06-01'::date` (misal: `DATE_TRUNC('month', '2024-06-01'::timestamp)`), karena tanpa cast PostgreSQL akan menghasilkan error 'date_trunc(unknown, unknown) is not unique'.\n"
-                    "  - Pastikan filter pengeluaran menggunakan `t.type = 'OUT'` dan pemasukan menggunakan `t.type = 'IN'`.\n"
-                    "Contoh jika user tanya 'pengeluaran bulan ini apa saja?':\n"
-                    "`SELECT COALESCE(ti.note, t.note) AS item, COALESCE(ti.quantity, 1) AS jumlah, (COALESCE(ti.amount, t.amount) * COALESCE(ti.quantity, 1)) AS total_harga, t.category AS kategori, t.created_at::date AS tanggal FROM transactions t LEFT JOIN transaction_items ti ON t.id = ti.transaction_id WHERE t.user_id = :user_id AND t.type = 'OUT' AND t.created_at >= DATE_TRUNC('month', CURRENT_DATE) ORDER BY t.created_at DESC`\n\n"
-                    "Aturan Keyakinan (Confidence Score) & Klarifikasi:\n"
-                    "- Nilai 'confidence_score' harus berkisar antara 0.0 (sangat tidak yakin) hingga 1.0 (sangat yakin).\n"
-                    "- Jika nominal transaksi (jumlah uang) atau nama item belanja tidak disebutkan secara eksplisit atau tidak jelas, berikan 'confidence_score' di bawah 0.8, set 'is_ambiguous' menjadi true, dan buat 'clarification_question' yang menanyakan info yang kurang secara spesifik dengan akhiran ', Sir?'.\n"
-                    "- Contoh: jika user mengetik 'saya beli roti', nominal harganya tidak ada. Berikan confidence_score = 0.5, is_ambiguous = true, dan clarification_question = 'Berapa harga roti yang Anda beli, Sir?'\n"
-                    "- Jika pesan berupa sapaan, percakapan umum, atau query yang sudah jelas maksudnya, berikan confidence_score = 1.0 dan is_ambiguous = false."
-                ))
-            ]
-            recent_messages = state["messages"][-6:] if len(state["messages"]) > 6 else state["messages"]
-            for msg in recent_messages:
-                if msg["role"] == "user":
-                    chat_history.append(HumanMessage(content=msg["content"]))
-                else:
-                    chat_history.append(AIMessage(content=msg["content"]))
+    chat_history = [
+        SystemMessage(content=(
+            "Anda adalah asisten keuangan pribadi cerdas bernama Dompetku AI yang melayani pengguna bagaikan JARVIS.\n"
+            "PENTING / PERATURAN PERSONA SIR:\n"
+            "1. Selalu panggil pengguna dengan sebutan 'Sir'.\n"
+            "2. Selalu akhiri setiap respon atau pertanyaan Anda dengan kata ', Sir.' atau ', Sir?' (Contoh: 'Berhasil mencatat pengeluaran Anda, Sir.' atau 'Berapa harga baksonya, Sir?').\n\n"
+            f"Waktu Sekarang: {current_time_str} (PENTING: Gunakan ini sebagai acuan tahun/tanggal saat ini saat menganalisis kueri waktu pengguna seperti 'bulan juni', 'minggu lalu', dsb. Selalu asumsikan tahun saat ini sesuai tahun sekarang kecuali pengguna menyebutkan tahun lain secara spesifik).\n"
+            "Tugas Anda adalah mendeteksi intent pengguna dan mengekstrak informasi detail item transaksi atau menghasilkan query database.\n"
+            "Pahami konteks percakapan sebelumnya untuk kalimat rujukan atau kalimat lanjutan (follow-up) dari pengguna.\n"
+            "PILIHAN INTENT:\n"
+            "- 'ADD_EXPENSE': untuk pencatatan pengeluaran baru.\n"
+            "- 'ADD_INCOME': untuk pencatatan pemasukan baru.\n"
+            "- 'UNDO': untuk membatalkan/menghapus transaksi terakhir yang baru saja dicatat.\n"
+            "- 'QUERY': untuk menanyakan/menganalisis riwayat transaksi keuangan mereka sendiri (misal: 'berapa pengeluaran hari ini', 'pengeluaran bulan ini', total belanja, pengeluaran kategori tertentu, list belanja terbesar, dll).\n"
+            "- 'APPEND_ITEM': jika pengguna ingin menambahkan item baru ke transaksi belanjaan yang paling terakhir dicatat (misal: 'tambahkan es jeruk 5000', 'eh masukkan es teh 3000 juga ke belanjaan tadi').\n"
+            "- 'MODIFY_LAST': jika pengguna ingin mengubah/merevisi detail transaksi terakhir yang baru saja diinput (misal: 'ganti harganya jadi 12000', 'harganya salah, harusnya 15000').\n"
+            "- 'GENERAL': untuk sapaan, pertanyaan umum non-finansial, atau percakapan biasa.\n\n"
+            "Aturan Memori Konteks:\n"
+            "- Jika pesan terakhir pengguna adalah kelanjutan transaksi (misal: 'sama es teh 5000' setelah membeli bakso),\n"
+            "  pilih intent 'APPEND_ITEM' jika itu berupa tambahan item baru untuk transaksi terakhir, lalu ekstrak detail item tersebut.\n"
+            "- Jika pesan terakhir bertujuan untuk merevisi nominal transaksi terakhir (misal: 'eh harganya salah, harusnya 15000'), pilih intent 'MODIFY_LAST' dan ekstrak nominal baru tersebut di bagian items.\n"
+            "- Jika pengguna mengetik kata seperti 'batal', 'cancel', atau 'undo', ubah intent menjadi 'UNDO'.\n\n"
+            "Aturan QUERY:\n"
+            "Jika intent adalah 'QUERY', hasilkan query SQL SELECT PostgreSQL yang valid di bidang 'sql_query'.\n"
+            "Query HANYA boleh mengakses tabel 'transactions' (t) dan 'transaction_items' (ti).\n"
+            "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
+            "Kolom tabel 'transaction_items' adalah: id, transaction_id, note, amount, quantity.\n"
+            "PENTING: Selalu masukkan filter `t.user_id = :user_id` di klausa WHERE agar data aman dan terisolasi.\n"
+            "PENTING / DILARANG KERAS: DILARANG MENGGUNAKAN FUNGSI `SUM()` atau `GROUP BY` jika pengguna menanyakan 'apa saja', 'daftar', 'rincian', 'riwayat', 'pengeluaran bulan ini', 'transaksi hari ini', atau 'list belanja'. HANYA gunakan `SUM()` JIKA DAN HANYA JIKA pengguna secara eksplisit meminta 'berapa total...'.\n"
+            "PENTING: Jika pengguna meminta daftar/rincian transaksi (misal: 'pengeluaran bulan ini', 'transaksi hari ini', 'list belanja minggu ini', 'apa saja pengeluaran saya'):\n"
+            "  - Gunakan LEFT JOIN antara `transactions t` dan `transaction_items ti ON t.id = ti.transaction_id`.\n"
+            "  - Pilih kolom dengan alias yang jelas: `COALESCE(ti.note, t.note) AS item`, `COALESCE(ti.quantity, 1) AS jumlah`, `COALESCE(ti.amount, t.amount) AS harga_satuan`, `(COALESCE(ti.amount, t.amount) * COALESCE(ti.quantity, 1)) AS total_harga`, `t.category AS kategori`, `t.created_at::date AS tanggal`.\n"
+            "  - DILARANG MENGGUNAKAN `SUM()` di sini! Pilih setiap baris transaksi secara individual agar tabel di UI menampilkan daftar item secara rinci.\n"
+            "PENTING: Untuk filter waktu/tanggal, gunakan PostgreSQL date functions berikut agar sangat akurat:\n"
+            "  - Harian (hari ini): `t.created_at::date = CURRENT_DATE`\n"
+            "  - Mingguan (minggu ini): `t.created_at >= DATE_TRUNC('week', CURRENT_DATE)`\n"
+            "  - Bulanan (bulan ini): `t.created_at >= DATE_TRUNC('month', CURRENT_DATE)`\n"
+            "  - PENTING: Jika membandingkan created_at dengan string tanggal statis (misal '2024-06-01'), Anda HARUS melakukan type cast secara eksplisit seperti `'2024-06-01'::timestamp` atau `'2024-06-01'::date` (misal: `DATE_TRUNC('month', '2024-06-01'::timestamp)`), karena tanpa cast PostgreSQL akan menghasilkan error 'date_trunc(unknown, unknown) is not unique'.\n"
+            "  - Pastikan filter pengeluaran menggunakan `t.type = 'OUT'` dan pemasukan menggunakan `t.type = 'IN'`.\n"
+            "Contoh jika user tanya 'pengeluaran bulan ini apa saja?':\n"
+            "`SELECT COALESCE(ti.note, t.note) AS item, COALESCE(ti.quantity, 1) AS jumlah, (COALESCE(ti.amount, t.amount) * COALESCE(ti.quantity, 1)) AS total_harga, t.category AS kategori, t.created_at::date AS tanggal FROM transactions t LEFT JOIN transaction_items ti ON t.id = ti.transaction_id WHERE t.user_id = :user_id AND t.type = 'OUT' AND t.created_at >= DATE_TRUNC('month', CURRENT_DATE) ORDER BY t.created_at DESC`\n\n"
+            "Aturan Keyakinan (Confidence Score) & Klarifikasi:\n"
+            "- Nilai 'confidence_score' harus berkisar antara 0.0 (sangat tidak yakin) hingga 1.0 (sangat yakin).\n"
+            "- Jika nominal transaksi (jumlah uang) atau nama item belanja tidak disebutkan secara eksplisit atau tidak jelas, berikan 'confidence_score' di bawah 0.8, set 'is_ambiguous' menjadi true, dan buat 'clarification_question' yang menanyakan info yang kurang secara spesifik dengan akhiran ', Sir?'.\n"
+            "- Contoh: jika user mengetik 'saya beli roti', nominal harganya tidak ada. Berikan confidence_score = 0.5, is_ambiguous = true, dan clarification_question = 'Berapa harga roti yang Anda beli, Sir?'\n"
+            "- Jika pesan berupa sapaan, percakapan umum, atau query yang sudah jelas maksudnya, berikan confidence_score = 1.0 dan is_ambiguous = false."
+        ))
+    ]
+    recent_messages = state["messages"][-6:] if len(state["messages"]) > 6 else state["messages"]
+    for msg in recent_messages:
+        if msg["role"] == "user":
+            chat_history.append(HumanMessage(content=msg["content"]))
+        else:
+            chat_history.append(AIMessage(content=msg["content"]))
 
-            structured_llm = llm.with_structured_output(TransactionExtraction)
-            extracted = structured_llm.invoke(chat_history)
-            items_list = []
-            for item in (extracted.items or []):
-                items_list.append({
-                    "note": item.note,
-                    "amount": item.amount if item.amount is not None else 0,
-                    "quantity": item.quantity
-                })
-            conf_val = extracted.confidence_score if extracted.confidence_score is not None else 1.0
+    extracted = invoke_llm_with_fallback(chat_history, TransactionExtraction, logs)
+    if extracted:
+        items_list = []
+        for item in (extracted.items or []):
+            items_list.append({
+                "note": item.note,
+                "amount": item.amount if item.amount is not None else 0,
+                "quantity": item.quantity
+            })
+        conf_val = extracted.confidence_score if extracted.confidence_score is not None else 1.0
 
-            intent = extracted.intent
-            sql_q = extracted.sql_query
-            msg_lower = last_message.lower()
+        intent = extracted.intent
+        sql_q = extracted.sql_query
+        msg_lower = last_message.lower()
 
-            # Override intent to QUERY if user message is asking for financial history/totals
-            query_kws = ["berapa", "pengeluaran", "pemasukan", "total", "riwayat", "daftar", "rincian", "list"]
-            if any(kw in msg_lower for kw in query_kws) and not any(kw in msg_lower for kw in ["beli", "bayar", "terima", "gaji"]):
-                intent = "QUERY"
+        # Override intent to QUERY if user message is asking for financial history/totals
+        query_kws = ["berapa", "pengeluaran", "pemasukan", "total", "riwayat", "daftar", "rincian", "list"]
+        if any(kw in msg_lower for kw in query_kws) and not any(kw in msg_lower for kw in ["beli", "bayar", "terima", "gaji"]):
+            intent = "QUERY"
 
-            if intent == "QUERY" and (not sql_q or "SELECT" not in sql_q.upper()):
-                sql_q = _build_default_sql_query(last_message)
+        if intent == "QUERY" and (not sql_q or "SELECT" not in sql_q.upper()):
+            sql_q = _build_default_sql_query(last_message)
 
-            return {
-                "intent": intent,
-                "extracted_data": {
-                    "category": extracted.category or "Other",
-                    "payment_method": extracted.payment_method or "tunai",
-                    "type": extracted.type or ("OUT" if intent == "ADD_EXPENSE" else "IN"),
-                    "items": items_list,
-                    "sql_query": sql_q,
-                    "confidence_score": conf_val,
-                    "is_ambiguous": extracted.is_ambiguous if extracted.is_ambiguous is not None else False,
-                    "clarification_question": extracted.clarification_question
-                },
-                "logs": [f"[Orchestrator] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{intent}' (Confidence: {int(conf_val * 100)}%)."]
-            }
-        except Exception as e:
-            logging.error(f"LLM extraction error: {e}. Falling back to rule-based.")
+        logs.append(f"[Orchestrator] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{intent}' (Confidence: {int(conf_val * 100)}%).")
+        return {
+            "intent": intent,
+            "extracted_data": {
+                "category": extracted.category or "Other",
+                "payment_method": extracted.payment_method or "tunai",
+                "type": extracted.type or ("OUT" if intent == "ADD_EXPENSE" else "IN"),
+                "items": items_list,
+                "sql_query": sql_q,
+                "confidence_score": conf_val,
+                "is_ambiguous": extracted.is_ambiguous if extracted.is_ambiguous is not None else False,
+                "clarification_question": extracted.clarification_question
+            },
+            "logs": logs
+        }
             
-    # Rule-based fallback
+    # Rule-based fallback (Lokal tanpa LLM)
+    logs.append("[Orchestrator Fallback] Menjalankan rule-based parsing lokal.")
     intent = "GENERAL"
     extracted_data = {
         "category": "Other",
@@ -290,12 +308,13 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
         intent = "ADD_EXPENSE"
         words = last_message.split()
         amount = 0
-        note = "belanja"
+        note_words = []
         for word in words:
             if word.isdigit():
                 amount = int(word)
             elif word.lower() not in ["saya", "beli", "bayar", "untuk", "dan"]:
-                note = word
+                note_words.append(word)
+        note = " ".join(note_words) if note_words else "belanja"
         extracted_data = {
             "category": "Other",
             "payment_method": "tunai",
@@ -303,18 +322,19 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             "items": [{"note": note, "amount": amount, "quantity": 1}],
             "confidence_score": 1.0 if amount > 0 else 0.5,
             "is_ambiguous": False if amount > 0 else True,
-            "clarification_question": None if amount > 0 else "Berapa nominal belanja pengeluaran Anda?"
+            "clarification_question": None if amount > 0 else "Berapa nominal belanja pengeluaran Anda, Sir?"
         }
     elif "terima" in last_message.lower() or "gaji" in last_message.lower():
         intent = "ADD_INCOME"
         words = last_message.split()
         amount = 0
-        note = "pendapatan"
+        note_words = []
         for word in words:
             if word.isdigit():
                 amount = int(word)
             elif word.lower() not in ["saya", "terima", "gaji", "dari"]:
-                note = word
+                note_words.append(word)
+        note = " ".join(note_words) if note_words else "pendapatan"
         extracted_data = {
             "category": "Salary",
             "payment_method": "tunai",
@@ -322,7 +342,7 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             "items": [{"note": note, "amount": amount, "quantity": 1}],
             "confidence_score": 1.0 if amount > 0 else 0.5,
             "is_ambiguous": False if amount > 0 else True,
-            "clarification_question": None if amount > 0 else "Berapa nominal pendapatan Anda?"
+            "clarification_question": None if amount > 0 else "Berapa nominal pemasukan Anda, Sir?"
         }
     elif any(kw in last_message.lower() for kw in ["pengeluaran", "pemasukan", "total", "riwayat", "daftar", "rincian", "list", "berapa", "transaksi"]):
         intent = "QUERY"

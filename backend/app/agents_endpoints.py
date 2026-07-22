@@ -74,13 +74,15 @@ async def simulate_entry_agent(payload: AgentSimulationRequest):
     
     # Fallback
     amount = 0
-    note = "belanja"
+    note_words = []
     words = last_message.split()
     for word in words:
         if word.isdigit():
             amount = int(word)
         elif word.lower() not in ["saya", "beli", "bayar", "untuk", "dan"]:
-            note = word
+            note_words.append(word)
+            
+    note = " ".join(note_words) if note_words else "belanja"
             
     is_amb = amount <= 0
     conf = 1.0 if amount > 0 else 0.5
