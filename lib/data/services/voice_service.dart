@@ -42,6 +42,8 @@ class VoiceService with ChangeNotifier {
 
   Future<void> speak(String text) async {
     await _tts.stop();
-    await _tts.speak(text);
+    // Replace "Sir" with phonetic "Sur" for id-ID TTS to pronounce English /sɜːr/ smoothly
+    final ttsText = text.replaceAll(RegExp(r'\bSir\b', caseSensitive: false), 'Sur');
+    await _tts.speak(ttsText);
   }
 }

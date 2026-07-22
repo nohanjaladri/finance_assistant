@@ -179,7 +179,10 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
         try:
             chat_history = [
                 SystemMessage(content=(
-                    "Anda adalah asisten keuangan pribadi cerdas bernama Dompetku AI.\n"
+                    "Anda adalah asisten keuangan pribadi cerdas bernama Dompetku AI yang melayani pengguna bagaikan JARVIS.\n"
+                    "PENTING / PERATURAN PERSONA SIR:\n"
+                    "1. Selalu panggil pengguna dengan sebutan 'Sir'.\n"
+                    "2. Selalu akhiri setiap respon atau pertanyaan Anda dengan kata ', Sir.' atau ', Sir?' (Contoh: 'Berhasil mencatat pengeluaran Anda, Sir.' atau 'Berapa harga baksonya, Sir?').\n\n"
                     f"Waktu Sekarang: {current_time_str} (PENTING: Gunakan ini sebagai acuan tahun/tanggal saat ini saat menganalisis kueri waktu pengguna seperti 'bulan juni', 'minggu lalu', dsb. Selalu asumsikan tahun saat ini sesuai tahun sekarang kecuali pengguna menyebutkan tahun lain secara spesifik).\n"
                     "Tugas Anda adalah mendeteksi intent pengguna dan mengekstrak informasi detail item transaksi atau menghasilkan query database.\n"
                     "Pahami konteks percakapan sebelumnya untuk kalimat rujukan atau kalimat lanjutan (follow-up) dari pengguna.\n"
@@ -217,8 +220,8 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "`SELECT COALESCE(ti.note, t.note) AS item, COALESCE(ti.quantity, 1) AS jumlah, (COALESCE(ti.amount, t.amount) * COALESCE(ti.quantity, 1)) AS total_harga, t.category AS kategori, t.created_at::date AS tanggal FROM transactions t LEFT JOIN transaction_items ti ON t.id = ti.transaction_id WHERE t.user_id = :user_id AND t.type = 'OUT' AND t.created_at >= DATE_TRUNC('month', CURRENT_DATE) ORDER BY t.created_at DESC`\n\n"
                     "Aturan Keyakinan (Confidence Score) & Klarifikasi:\n"
                     "- Nilai 'confidence_score' harus berkisar antara 0.0 (sangat tidak yakin) hingga 1.0 (sangat yakin).\n"
-                    "- Jika nominal transaksi (jumlah uang) atau nama item belanja tidak disebutkan secara eksplisit atau tidak jelas, berikan 'confidence_score' di bawah 0.8, set 'is_ambiguous' menjadi true, dan buat 'clarification_question' yang menanyakan info yang kurang secara spesifik.\n"
-                    "- Contoh: jika user mengetik 'saya beli roti', nominal harganya tidak ada. Berikan confidence_score = 0.5, is_ambiguous = true, dan clarification_question = 'Berapa harga roti yang Anda beli?'\n"
+                    "- Jika nominal transaksi (jumlah uang) atau nama item belanja tidak disebutkan secara eksplisit atau tidak jelas, berikan 'confidence_score' di bawah 0.8, set 'is_ambiguous' menjadi true, dan buat 'clarification_question' yang menanyakan info yang kurang secara spesifik dengan akhiran ', Sir?'.\n"
+                    "- Contoh: jika user mengetik 'saya beli roti', nominal harganya tidak ada. Berikan confidence_score = 0.5, is_ambiguous = true, dan clarification_question = 'Berapa harga roti yang Anda beli, Sir?'\n"
                     "- Jika pesan berupa sapaan, percakapan umum, atau query yang sudah jelas maksudnya, berikan confidence_score = 1.0 dan is_ambiguous = false."
                 ))
             ]
@@ -611,7 +614,7 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
         if not has_time_spec and (extracted_data.get("is_ambiguous") or not extracted_data.get("clarification_question")):
             extracted_data["is_ambiguous"] = True
-            extracted_data["clarification_question"] = "Apakah Anda ingin melihat analisis pengeluaran untuk **hari ini**, **minggu ini**, atau **bulan ini**?"
+            extracted_data["clarification_question"] = "Apakah Anda ingin melihat analisis pengeluaran untuk **hari ini**, **minggu ini**, atau **bulan ini**, Sir?"
 
         if extracted_data.get("is_ambiguous") and extracted_data.get("clarification_question"):
             clarification_msg = extracted_data["clarification_question"]
