@@ -345,8 +345,23 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
         "logs": [f"[Orchestrator (Fallback)] Menganalisis input: \"{last_message}\". Mendeteksi intent: '{intent}' (Confidence: {int(conf_val * 100)}%)."]
     }
 
+def _ensure_sir_suffix(text: str) -> str:
+    if not text:
+        return "Baik, Sir."
+    text = text.strip()
+    if re.search(r'\bSir[\.\?\!\s]*$', text, re.IGNORECASE):
+        return text
+    clean_text = text.rstrip('.!? ')
+    return f"{clean_text}, Sir."
+
 # 2. Tool Executor Node
 def tool_executor_node(state: AgentState) -> Dict[str, Any]:
+    res = _internal_tool_executor(state)
+    if "response" in res and res["response"]:
+        res["response"] = _ensure_sir_suffix(res["response"])
+    return res
+
+def _internal_tool_executor(state: AgentState) -> Dict[str, Any]:
     intent = state.get("intent")
     extracted_data = state.get("extracted_data") or {}
     user_id = state.get("user_id", "default_user")
