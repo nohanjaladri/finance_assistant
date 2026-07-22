@@ -108,10 +108,11 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
                     "Kolom tabel 'transaction_items' adalah: id, transaction_id, note, amount, quantity.\n"
                     "PENTING: Selalu masukkan filter `t.user_id = :user_id` di klausa WHERE agar data aman dan terisolasi.\n"
+                    "PENTING / DILARANG KERAS: DILARANG MENGGUNAKAN FUNGSI `SUM()` atau `GROUP BY` jika pengguna menanyakan 'apa saja', 'daftar', 'rincian', 'riwayat', 'pengeluaran bulan ini', 'transaksi hari ini', atau 'list belanja'. HANYA gunakan `SUM()` JIKA DAN HANYA JIKA pengguna secara eksplisit meminta 'berapa total...'.\n"
                     "PENTING: Jika pengguna meminta daftar/rincian transaksi (misal: 'pengeluaran bulan ini', 'transaksi hari ini', 'list belanja minggu ini', 'apa saja pengeluaran saya'):\n"
                     "  - Gunakan LEFT JOIN antara `transactions t` dan `transaction_items ti ON t.id = ti.transaction_id`.\n"
                     "  - Pilih kolom dengan alias yang jelas: `COALESCE(ti.note, t.note) AS item`, `COALESCE(ti.quantity, 1) AS jumlah`, `COALESCE(ti.amount, t.amount) AS harga_satuan`, `(COALESCE(ti.amount, t.amount) * COALESCE(ti.quantity, 1)) AS total_harga`, `t.category AS kategori`, `t.created_at::date AS tanggal`.\n"
-                    "  - Dengan begitu, tabel data di UI akan menampilkan rincian item apa saja yang dibeli beserta harganya.\n"
+                    "  - DILARANG MENGGUNAKAN `SUM()` di sini! Pilih setiap baris transaksi secara individual agar tabel di UI menampilkan daftar item secara rinci.\n"
                     "PENTING: Untuk filter waktu/tanggal, gunakan PostgreSQL date functions berikut agar sangat akurat:\n"
                     "  - Harian (hari ini): `t.created_at::date = CURRENT_DATE`\n"
                     "  - Mingguan (minggu ini): `t.created_at >= DATE_TRUNC('week', CURRENT_DATE)`\n"
@@ -473,8 +474,40 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         if not normalized_sql.startswith("SELECT"):
             current_logs.append("[Analyst Agent] Keamanan terpicu: Query tidak diawali dengan SELECT.")
             return {"response": "Akses ditolak: Hanya query SELECT membaca data yang diizinkan.", "logs": current_logs}
+
+        # Guardrail: Prevent SUM() hallucination when user asked for itemized breakdown/list
+        msg_lower = last_message.lower()
+        is_list_request = any(kw in msg_lower for kw in ["apa", "list", "daftar", "rincian", "detail", "bulan ini", "minggu ini", "hari ini", "terakhir"])
+        is_explicit_total = any(kw in msg_lower for kw in ["berapa total", "jumlah total", "total pengeluaran", "total pemasukan"])
+
+        if "SUM(" in normalized_sql and is_list_request and not is_explicit_total:
+            current_logs.append("[Analyst Agent] Guardrail terpicu: Mencegah halusinasi SUM() pada permintaan rincian. Mengubah query ke rincian item individual.")
             
-        # Clean function calls like EXTRACT(... FROM ...) to avoid false positive table matches
+            time_clause = ""
+            if "MONTH" in normalized_sql or "bulan ini" in msg_lower:
+                time_clause = "AND t.created_at >= DATE_TRUNC('month', CURRENT_DATE)"
+            elif "WEEK" in normalized_sql or "minggu ini" in msg_lower:
+                time_clause = "AND t.created_at >= DATE_TRUNC('week', CURRENT_DATE)"
+            elif "CURRENT_DATE" in normalized_sql or "hari ini" in msg_lower:
+                time_clause = "AND t.created_at::date = CURRENT_DATE"
+
+            type_clause = "AND t.type = 'OUT'"
+            if "type = 'in'" in sql_query.lower() or "pemasukan" in msg_lower:
+                type_clause = "AND t.type = 'IN'"
+
+            sql_query = (
+                f"SELECT COALESCE(ti.note, t.note) AS item, "
+                f"COALESCE(ti.quantity, 1) AS jumlah, "
+                f"COALESCE(ti.amount, t.amount) AS harga_satuan, "
+                f"(COALESCE(ti.amount, t.amount) * COALESCE(ti.quantity, 1)) AS total_harga, "
+                f"t.category AS kategori, "
+                f"t.created_at::date AS tanggal "
+                f"FROM transactions t "
+                f"LEFT JOIN transaction_items ti ON t.id = ti.transaction_id "
+                f"WHERE t.user_id = :user_id {type_clause} {time_clause} "
+                f"ORDER BY t.created_at DESC"
+            )
+            normalized_sql = sql_query.strip().upper()
         check_query = re.sub(r'\b\w+\s*\([^)]*?FROM[^)]*?\)', '', sql_query, flags=re.IGNORECASE)
             
         allowed_tables = ["transactions", "transaction_items"]
