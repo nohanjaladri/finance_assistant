@@ -132,6 +132,7 @@ async def simulate_analyst_agent(payload: AgentSimulationRequest):
                     "  - Harian (hari ini): `created_at::date = CURRENT_DATE` atau group by `created_at::date`\n"
                     "  - Mingguan (minggu ini): `created_at >= DATE_TRUNC('week', CURRENT_DATE)` atau group by `DATE_TRUNC('week', created_at)`\n"
                     "  - Bulanan (bulan ini): `created_at >= DATE_TRUNC('month', CURRENT_DATE)` atau group by `DATE_TRUNC('month', created_at)`\n"
+                    "  - PENTING: Jika membandingkan created_at dengan string tanggal statis (misal '2024-06-01'), Anda HARUS melakukan type cast secara eksplisit seperti `'2024-06-01'::timestamp` atau `'2024-06-01'::date` (misal: `DATE_TRUNC('month', '2024-06-01'::timestamp)`), karena tanpa cast PostgreSQL akan menghasilkan error 'date_trunc(unknown, unknown) is not unique'.\n"
                     "  - Pastikan filter pengeluaran menggunakan `type = 'OUT'` dan pemasukan menggunakan `type = 'IN'`.\n"
                     "Kembalikan HANYA query SELECT sql mentah di output, tanpa markdown, tanpa penjelasan."
                 )),
