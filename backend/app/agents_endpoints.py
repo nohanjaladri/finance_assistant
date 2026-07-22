@@ -122,9 +122,12 @@ async def simulate_analyst_agent(payload: AgentSimulationRequest):
     if llm:
         try:
             logs.append("[Analyst Agent Simulator] Meminta Llama-3.3 menyusun kueri SQL SELECT PostgreSQL...")
+            import datetime
+            current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             chat_history = [
                 SystemMessage(content=(
                     "Anda adalah Database Analyst Agent.\n"
+                    f"Waktu Sekarang: {current_time_str} (PENTING: Gunakan ini sebagai acuan tahun/tanggal saat ini saat menganalisis kueri waktu pengguna seperti 'bulan juni', 'minggu lalu', dsb. Selalu asumsikan tahun saat ini sesuai tahun sekarang kecuali pengguna menyebutkan tahun lain secara spesifik).\n"
                     "Tugas Anda HANYA menghasilkan query SQL SELECT PostgreSQL yang valid untuk tabel 'transactions' (t) dan 'transaction_items' (ti).\n"
                     "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
                     "Gunakan parameter ':user_id' untuk memfilter kepemilikan data.\n"

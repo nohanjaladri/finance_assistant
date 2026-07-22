@@ -77,6 +77,8 @@ if settings.GROQ_API_KEY:
 # 1. Detect Intent Node
 def detect_intent_node(state: AgentState) -> Dict[str, Any]:
     last_message = state["messages"][-1]["content"] if state["messages"] else ""
+    import datetime
+    current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # Try using Groq if available
     if llm:
@@ -84,6 +86,7 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
             chat_history = [
                 SystemMessage(content=(
                     "Anda adalah asisten keuangan pribadi cerdas bernama Dompetku AI.\n"
+                    f"Waktu Sekarang: {current_time_str} (PENTING: Gunakan ini sebagai acuan tahun/tanggal saat ini saat menganalisis kueri waktu pengguna seperti 'bulan juni', 'minggu lalu', dsb. Selalu asumsikan tahun saat ini sesuai tahun sekarang kecuali pengguna menyebutkan tahun lain secara spesifik).\n"
                     "Tugas Anda adalah mendeteksi intent pengguna dan mengekstrak informasi detail item transaksi atau menghasilkan query database.\n"
                     "Pahami konteks percakapan sebelumnya untuk kalimat rujukan atau kalimat lanjutan (follow-up) dari pengguna.\n"
                     "PILIHAN INTENT:\n"
