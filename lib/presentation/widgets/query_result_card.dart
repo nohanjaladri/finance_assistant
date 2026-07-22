@@ -239,8 +239,9 @@ class QueryResultCard extends StatelessWidget {
                           cells: result.columns.map((col) {
                             final val = row[col];
                             String displayVal = val?.toString() ?? '-';
-                            if (val is int && (col.toLowerCase().contains('amount') || col.toLowerCase().contains('total') || col.toLowerCase().contains('harga') || col.toLowerCase().contains('nominal'))) {
-                              final str = val.abs().toString();
+                            if (val is num && (col.toLowerCase().contains('amount') || col.toLowerCase().contains('total') || col.toLowerCase().contains('harga') || col.toLowerCase().contains('nominal') || col.toLowerCase().contains('biaya') || col.toLowerCase().contains('price'))) {
+                              final amountInt = val.toInt();
+                              final str = amountInt.abs().toString();
                               final buf = StringBuffer();
                               for (int i = 0; i < str.length; i++) {
                                 if (i > 0 && (str.length - i) % 3 == 0) buf.write('.');
