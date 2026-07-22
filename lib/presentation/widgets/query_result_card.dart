@@ -6,6 +6,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 class RawQueryResult {
@@ -64,12 +65,14 @@ class QueryResultCard extends StatelessWidget {
   final String aiSummary; // Jawaban teks ringkas dari AI
   final Map<String, dynamic> queryResult; // Structured query result map {'rows': ..., 'columns': ...}
   final VizType vizType; // Hint visualisasi dari AI
+  final String? sqlQuery; // Query SQL opsional
 
   const QueryResultCard({
     super.key,
     required this.aiSummary,
     required this.queryResult,
     required this.vizType,
+    this.sqlQuery,
   });
 
   RawQueryResult _toRawResult() {
@@ -83,64 +86,315 @@ class QueryResultCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final result = _toRawResult();
+    final effectiveSql = sqlQuery ?? queryResult['sql_query'] as String?;
+
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 5),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.grey[100],
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: Colors.deepPurple.withOpacity(0.2)),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.88,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Badge "Data dari Database"
-          Row(
-            children: [
-              const Icon(Icons.analytics, size: 14, color: Colors.deepPurple),
-              const SizedBox(width: 4),
-              Text(
-                'Analisis Data',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.deepPurple[300],
-                  fontWeight: FontWeight.bold,
+          // Bubble 1: Ringkasan teks AI
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
                 ),
-              ),
-            ],
+              ],
+              border: Border.all(color: const Color(0xFFE0E0E0)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF5E5CE6).withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.table_chart_rounded, size: 14, color: Color(0xFF5E5CE6)),
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Hasil Analisis Data',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF5E5CE6),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  aiSummary,
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF1E1E2C), height: 1.4),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
 
-          // Ringkasan teks AI
-          Text(
-            aiSummary,
-            style: const TextStyle(fontSize: 14, color: Colors.black87),
-          ),
-
-          // Tombol Lihat Detail (hanya jika ada data)
+          // Bubble 2: Tabel Data Modern & Profesional (Jika Ada Data)
           if (result.isSuccess && !result.isEmpty) ...[
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () => _showDetailModal(context, result),
-                icon: const Icon(Icons.table_chart, size: 16),
-                label: Text('Lihat Detail (${result.rowCount} baris)'),
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.deepPurple,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
+            const SizedBox(height: 8),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.03),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
                   ),
-                  shape: RoundedRectangleBorder(
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Modern Header Bar
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    color: const Color(0xFFF8F9FE),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.storage_rounded, size: 14, color: Color(0xFF5E5CE6)),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Tabel Data (${result.rowCount} entri)',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF2D3748),
+                              ),
+                            ),
+                          ],
+                        ),
+                        InkWell(
+                          onTap: () => _showDetailModal(context, result),
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            child: Row(
+                              children: [
+                                Text(
+                                  'Visualisasi',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF5E5CE6),
+                                  ),
+                                ),
+                                Icon(Icons.chevron_right_rounded, size: 16, color: Color(0xFF5E5CE6)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                  // Horizontal scrollable clean data table
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const BouncingScrollPhysics(),
+                    child: DataTable(
+                      headingRowColor: WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+                      dataRowMinHeight: 36,
+                      dataRowMaxHeight: 44,
+                      columnSpacing: 20,
+                      horizontalMargin: 14,
+                      headingTextStyle: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        color: Color(0xFF475569),
+                      ),
+                      dataTextStyle: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF1E293B),
+                      ),
+                      columns: result.columns.map((col) {
+                        return DataColumn(
+                          label: Text(
+                            col.toUpperCase().replaceAll('_', ' '),
+                          ),
+                        );
+                      }).toList(),
+                      rows: result.rows.map((row) {
+                        return DataRow(
+                          cells: result.columns.map((col) {
+                            final val = row[col];
+                            String displayVal = val?.toString() ?? '-';
+                            if (val is int && (col.toLowerCase().contains('amount') || col.toLowerCase().contains('total') || col.toLowerCase().contains('harga') || col.toLowerCase().contains('nominal'))) {
+                              final str = val.abs().toString();
+                              final buf = StringBuffer();
+                              for (int i = 0; i < str.length; i++) {
+                                if (i > 0 && (str.length - i) % 3 == 0) buf.write('.');
+                                buf.write(str[i]);
+                              }
+                              displayVal = "Rp ${buf.toString()}";
+                            }
+                            return DataCell(
+                              Text(
+                                displayVal,
+                                style: const TextStyle(fontWeight: FontWeight.w500),
+                              ),
+                            );
+                          }).toList(),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // Bubble 3: Tombol Detail Query SQL
+          if (effectiveSql != null && effectiveSql.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                margin: const EdgeInsets.only(top: 2),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => _showSqlQueryModal(context, effectiveSql),
                     borderRadius: BorderRadius.circular(20),
-                    side: BorderSide(color: Colors.deepPurple.withOpacity(0.4)),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFF5E5CE6).withOpacity(0.3)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.02),
+                            blurRadius: 4,
+                          )
+                        ],
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.code_rounded, size: 14, color: Color(0xFF5E5CE6)),
+                          SizedBox(width: 6),
+                          Text(
+                            "Lihat Detail Query SQL",
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF5E5CE6),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  void _showSqlQueryModal(BuildContext context, String sql) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.terminal_rounded, color: Color(0xFF5E5CE6), size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      "Detail Kueri SQL",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: Color(0xFF1E1E2C),
+                      ),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  icon: const Icon(Icons.copy_rounded, size: 18, color: Color(0xFF5E5CE6)),
+                  tooltip: "Salin Query",
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: sql));
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text("Query SQL berhasil disalin!"),
+                        behavior: SnackBarBehavior.floating,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E2C),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: SelectableText(
+                sql,
+                style: const TextStyle(
+                  fontFamily: "monospace",
+                  fontSize: 12,
+                  color: Color(0xFF00FF66),
+                  height: 1.4,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
       ),
     );
   }

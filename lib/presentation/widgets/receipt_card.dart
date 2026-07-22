@@ -28,7 +28,10 @@ class ReceiptCard extends StatelessWidget {
     }
     List<dynamic> items = [];
     try {
-      items = data['transactions'] as List<dynamic>? ?? [];
+      items = data['transactions'] as List<dynamic>? ??
+          data['items'] as List<dynamic>? ??
+          data['extracted_items'] as List<dynamic>? ??
+          [];
     } catch (_) {}
 
     if (items.isEmpty) return const SizedBox.shrink();
@@ -37,22 +40,22 @@ class ReceiptCard extends StatelessWidget {
     int totalOut = 0;
 
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
+      margin: const EdgeInsets.symmetric(vertical: 6),
       padding: const EdgeInsets.all(16),
       constraints: BoxConstraints(
-        maxWidth: MediaQuery.of(context).size.width * 0.85,
+        maxWidth: MediaQuery.of(context).size.width * 0.82,
       ),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withOpacity(0.04),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
         ],
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -62,149 +65,123 @@ class ReceiptCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: Colors.deepPurple.shade50,
+                  color: const Color(0xFF5E5CE6).withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
-                  Icons.receipt_long,
+                  Icons.receipt_long_rounded,
                   size: 16,
-                  color: Colors.deepPurple,
+                  color: Color(0xFF5E5CE6),
                 ),
               ),
               const SizedBox(width: 8),
               const Text(
-                "Rincian Transaksi",
+                "Detail Transaksi",
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
-                  color: Colors.black87,
+                  color: Color(0xFF1E1E2C),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          const Divider(height: 1, thickness: 1),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
+          const Divider(height: 1, thickness: 1, color: Color(0xFFF0F0F0)),
+          const SizedBox(height: 10),
           ...items.map((item) {
             final note = item['note'] ?? 'Item';
             final amount = item['amount'] as int? ?? 0;
+            final quantity = item['quantity'] as int? ?? item['qty'] as int? ?? 1;
             final type = item['type'] ?? 'OUT';
             final isIn = type == 'IN';
+            final itemTotal = amount * quantity;
 
             if (isIn) {
-              totalIn += amount;
+              totalIn += itemTotal;
             } else {
-              totalOut += amount;
+              totalOut += itemTotal;
             }
+
+            final textColor = isIn ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F);
 
             return Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
+                    flex: 4,
                     child: Text(
                       note,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 13,
-                        color: Colors.black87,
+                        fontWeight: FontWeight.w600,
+                        color: textColor,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    "Rp ${_formatRupiah(amount)}",
-                    style: const TextStyle(
+                    "$quantity",
+                    style: TextStyle(
                       fontSize: 13,
-                      fontWeight: FontWeight.w500,
+                      fontWeight: FontWeight.w600,
+                      color: textColor.withOpacity(0.8),
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    isIn
-                        ? Icons.arrow_upward_rounded
-                        : Icons.arrow_downward_rounded,
-                    size: 14,
-                    color: isIn ? Colors.green : Colors.red,
+                  const SizedBox(width: 16),
+                  Text(
+                    _formatRupiah(itemTotal),
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: textColor,
+                    ),
                   ),
                 ],
               ),
             );
           }),
-          const SizedBox(height: 4),
-          const Divider(height: 1, thickness: 1),
-          const SizedBox(height: 12),
-
-          if (totalIn > 0 && totalOut > 0) ...[
-            _buildSummaryRow("Total Pemasukan", totalIn, Colors.green),
-            const SizedBox(height: 4),
-            _buildSummaryRow("Total Pengeluaran", totalOut, Colors.red),
-            const SizedBox(height: 8),
-          ],
-
-          _buildNettoRow(totalIn - totalOut),
+          const SizedBox(height: 6),
+          const Divider(height: 1, thickness: 1, color: Color(0xFFF0F0F0)),
+          const SizedBox(height: 10),
+          _buildTotalRow(totalIn, totalOut),
         ],
       ),
     );
   }
 
-  Widget _buildSummaryRow(String label, int amount, Color color) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-        Text(
-          "Rp ${_formatRupiah(amount)}",
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-            color: color,
-          ),
-        ),
-      ],
-    );
-  }
+  Widget _buildTotalRow(int totalIn, int totalOut) {
+    final isIncome = totalIn >= totalOut;
+    final netto = (totalIn - totalOut).abs();
+    final mainColor = isIncome ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F);
+    final bgColor = isIncome ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE);
 
-  Widget _buildNettoRow(int netto) {
-    final isPositive = netto >= 0;
     return Container(
-      padding: const EdgeInsets.all(10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: isPositive ? Colors.green.shade50 : Colors.red.shade50,
-        borderRadius: BorderRadius.circular(8),
+        color: bgColor,
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
-            "TOTAL",
+            "total",
             style: TextStyle(
               fontWeight: FontWeight.bold,
               fontSize: 13,
-              color: isPositive ? Colors.green.shade800 : Colors.red.shade800,
+              color: mainColor,
             ),
           ),
-          Row(
-            children: [
-              Text(
-                "Rp ${_formatRupiah(netto.abs())}",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                  color: isPositive
-                      ? Colors.green.shade800
-                      : Colors.red.shade800,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Icon(
-                isPositive
-                    ? Icons.arrow_upward_rounded
-                    : Icons.arrow_downward_rounded,
-                size: 16,
-                color: isPositive ? Colors.green.shade800 : Colors.red.shade800,
-              ),
-            ],
+          Text(
+            _formatRupiah(netto),
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+              color: mainColor,
+            ),
           ),
         ],
       ),

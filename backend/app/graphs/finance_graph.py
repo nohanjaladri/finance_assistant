@@ -493,13 +493,23 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             from sqlalchemy import text
             result = db.execute(text(sql_query), {"user_id": user_id})
             rows = result.fetchall()
-            columns = result.keys()
+            columns = list(result.keys())
             
             formatted_results = []
             for row in rows:
                 formatted_results.append(dict(zip(columns, row)))
                 
             current_logs.append(f"[Analyst Agent] Kueri berhasil dieksekusi, mendapatkan {len(formatted_results)} baris hasil.")
+            
+            # Attach query_result payload so frontend gets rows, columns, and sql_query
+            query_result_payload = {
+                "columns": columns,
+                "rows": formatted_results,
+                "sql_query": sql_query
+            }
+            extracted_data["query_result"] = query_result_payload
+            extracted_data["sql_query"] = sql_query
+
             if not formatted_results:
                 response_msg = "Tidak ditemukan data transaksi yang sesuai dengan pertanyaan Anda."
             else:
@@ -520,6 +530,8 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             response_msg = f"Gagal mengambil data dari database: {e}"
         finally:
             db.close()
+            
+        return {"response": response_msg, "logs": current_logs, "extracted_data": extracted_data}
     else:
         current_logs.append("[Conversation Agent] Menjawab pesan obrolan umum/sapaan pengguna.")
         response_msg = "Halo! Ada yang bisa saya bantu dengan keuangan Anda?"

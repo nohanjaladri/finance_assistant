@@ -6,20 +6,30 @@ class BackendAiResponse {
   final String intent;
   final Map<String, dynamic> extractedData;
   final List<String> logs;
+  final dynamic queryResult;
+  final String vizType;
 
   BackendAiResponse({
     required this.reply,
     required this.intent,
     required this.extractedData,
     required this.logs,
+    this.queryResult,
+    this.vizType = 'auto',
   });
 
   factory BackendAiResponse.fromJson(Map<String, dynamic> json) {
+    final extData = json['extracted_data'] as Map<String, dynamic>? ?? {};
+    final qResult = json['query_result'] ?? extData['query_result'];
+    final viz = json['viz_type'] as String? ?? extData['viz_type'] as String? ?? 'auto';
+
     return BackendAiResponse(
       reply: json['reply'] as String? ?? 'Gagal memproses.',
       intent: json['intent'] as String? ?? 'UNKNOWN',
-      extractedData: json['extracted_data'] as Map<String, dynamic>? ?? {},
+      extractedData: extData,
       logs: (json['logs'] as List<dynamic>?)?.map((e) => e as String).toList() ?? [],
+      queryResult: qResult,
+      vizType: viz,
     );
   }
 }

@@ -57,6 +57,20 @@ class FinanceProvider extends ChangeNotifier {
     }
   }
 
+  // Debug Console Logs
+  final List<String> debugLogs = [];
+
+  void addDebugLog(String log) {
+    final timestamp = DateTime.now().toIso8601String().substring(11, 19);
+    debugLogs.add("[$timestamp] $log");
+    notifyListeners();
+  }
+
+  void clearDebugLogs() {
+    debugLogs.clear();
+    notifyListeners();
+  }
+
   // AI state
   bool isAiThinking = false;
   int pendingCount = 0;

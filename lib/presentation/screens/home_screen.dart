@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../data/models/transaction_model.dart';
 import '../../data/services/backend_ai_service.dart';
 import '../../data/services/supabase_service.dart';
 import '../../data/services/voice_service.dart';
@@ -147,6 +146,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  String _formatRupiah(int amount) {
+    final str = amount.abs().toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < str.length; i++) {
+      if (i > 0 && (str.length - i) % 3 == 0) buf.write('.');
+      buf.write(str[i]);
+    }
+    return buf.toString();
+  }
+
   // ============================================================
   // SEND MESSAGE
   // ============================================================
@@ -162,31 +171,72 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     // Add user message to UI
     await finance.addMessage(text, false);
+    finance.addDebugLog("User input: \"$text\"");
     finance.setAiThinking(true);
     _scrollChatToBottom();
 
     try {
+      finance.addDebugLog("Calling backend AI /chat service...");
       final response = await BackendAiService().sendMessage(
         text,
         userId: SupabaseService.instance.currentUserId,
       );
+
       if (response != null) {
-        // Show AI reply
-        await finance.addMessage(response.reply, true, logs: response.logs);
-        if (_isChatExpanded) {
-          voice.speak(response.reply);
+        finance.addDebugLog("AI Intent detected: ${response.intent}");
+        if (response.logs.isNotEmpty) {
+          for (final log in response.logs) {
+            finance.addDebugLog("[Step] $log");
+          }
         }
 
-        // Refresh data from Supabase since the backend already inserted the transaction
-        if (response.intent == 'ADD_EXPENSE' ||
-            response.intent == 'ADD_INCOME') {
+        if (response.intent == 'ADD_EXPENSE' || response.intent == 'ADD_INCOME') {
+          final itemsList = (response.extractedData['items'] as List<dynamic>?) ??
+              (response.extractedData['transactions'] as List<dynamic>?) ??
+              [];
+          
+          final itemNamesList = itemsList.map((e) => (e['note'] ?? 'Item').toString()).toList();
+          final itemNames = itemNamesList.join(', ');
+
+          int totalAmount = 0;
+          for (final it in itemsList) {
+            final amt = (it['amount'] as int?) ?? 0;
+            final qty = (it['quantity'] as int?) ?? (it['qty'] as int?) ?? 1;
+            totalAmount += (amt * qty);
+          }
+
+          final hardcodedReply = "Transaksi untuk $itemNames berhasil dicatat dengan total Rp ${_formatRupiah(totalAmount)}.";
+
+          // 1. Show main text reply
+          await finance.addMessage(hardcodedReply, true, logs: response.logs);
+          if (_isChatExpanded) {
+            voice.speak(hardcodedReply);
+          }
+
+          // 2. Add receipt breakdown bubble
+          final receiptMap = {
+            'transactions': itemsList,
+            'intent': response.intent,
+            'total': totalAmount,
+          };
+          await finance.addMessage('RECEIPT_DATA', true, receiptData: receiptMap);
+
           await finance.refreshAll();
+        } else {
+          // General AI query or analysis response
+          final qResult = response.queryResult ?? response.extractedData['query_result'];
+          await finance.addMessage(response.reply, true, logs: response.logs, queryResult: qResult, vizType: response.vizType);
+          if (_isChatExpanded && response.reply.isNotEmpty) {
+            voice.speak(response.reply);
+          }
         }
       } else {
         await finance.addMessage("Maaf, gagal terhubung ke backend AI.", true);
+        finance.addDebugLog("Error: Backend returned null response");
       }
     } catch (e) {
       debugPrint("Error sending message to backend: $e");
+      finance.addDebugLog("Exception: $e");
       await finance.addMessage(
         "Terjadi kesalahan sistem saat menghubungi AI.",
         true,
@@ -670,27 +720,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               ),
                             ),
                             const SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                const Icon(
-                                  Icons.chat_bubble_rounded,
-                                  color: Color(0xFF5E5CE6),
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 6),
-                                const Text(
-                                  "Asisten AI",
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF1E1E2C),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              child: Row(
+                                children: [
+                                  const SizedBox(width: 32),
+                                  Expanded(
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        const Icon(
+                                          Icons.chat_bubble_rounded,
+                                          color: Color(0xFF5E5CE6),
+                                          size: 16,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        const Text(
+                                          "Asisten AI",
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF1E1E2C),
+                                          ),
+                                        ),
+                                        if (finance.isAiThinking) ...[
+                                          const SizedBox(width: 8),
+                                          const ThinkingDots(),
+                                        ],
+                                      ],
+                                    ),
                                   ),
-                                ),
-                                if (finance.isAiThinking) ...[
-                                  const SizedBox(width: 8),
-                                  const ThinkingDots(),
+                                  IconButton(
+                                    icon: const Icon(
+                                      Icons.developer_mode_rounded,
+                                      color: Color(0xFF5E5CE6),
+                                      size: 20,
+                                    ),
+                                    tooltip: "Dev Tools Console",
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(),
+                                    onPressed: () => _showDevToolsConsole(context, finance),
+                                  ),
                                 ],
-                              ],
+                              ),
                             ),
                           ],
                         ),
@@ -1018,11 +1089,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
     }
 
-    final rawLogs = msg['logs'];
-    final logs = rawLogs is List
-        ? List<String>.from(rawLogs.map((e) => e.toString()))
-        : null;
-
     return Align(
       alignment: isAi ? Alignment.centerLeft : Alignment.centerRight,
       child: Container(
@@ -1051,41 +1117,199 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              text,
-              style: TextStyle(
-                color: isAi ? const Color(0xFF1E1E2C) : Colors.white,
-                fontSize: 14,
-                height: 1.4,
-              ),
-            ),
-            if (isAi && logs != null && logs.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              const Divider(color: Colors.black12, height: 10),
-              const SizedBox(height: 4),
-              const Row(
-                children: [
-                  Icon(Icons.psychology_outlined, size: 12, color: Colors.blueAccent),
-                  SizedBox(width: 4),
-                  Text("Jarvis Steps:", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
-                ],
-              ),
-              const SizedBox(height: 4),
-              ...logs.map((log) => Padding(
-                padding: const EdgeInsets.only(bottom: 2.0),
-                child: Text(
-                  "• $log",
-                  style: const TextStyle(fontSize: 9, color: Colors.black54, fontFamily: "monospace"),
-                ),
-              )),
-            ]
-          ],
+        child: Text(
+          text,
+          style: TextStyle(
+            color: isAi ? const Color(0xFF1E1E2C) : Colors.white,
+            fontSize: 14,
+            height: 1.4,
+          ),
         ),
       ),
+    );
+  }
+
+  void _showDevToolsConsole(BuildContext context, FinanceProvider finance) {
+    final Set<String> allLogsSet = {};
+    for (final log in finance.debugLogs) {
+      allLogsSet.add(log);
+    }
+    for (final msg in finance.chatHistory) {
+      final rawLogs = msg['logs'];
+      if (rawLogs is List) {
+        for (final l in rawLogs) {
+          allLogsSet.add("[Step] ${l.toString()}");
+        }
+      }
+    }
+    final logsList = allLogsSet.toList();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        String searchQuery = "";
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final filtered = logsList
+                .where((l) => l.toLowerCase().contains(searchQuery.toLowerCase()))
+                .toList();
+            final fullTextLog = filtered.join("\n");
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: const BoxDecoration(
+                color: Color(0xFF181824),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                children: [
+                  // Handle bar & Header
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: const BoxDecoration(
+                      border: Border(bottom: BorderSide(color: Colors.white10)),
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            const Icon(Icons.terminal_rounded, color: Color(0xFF00FF66), size: 22),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                "Dev Tools Console (Debug Log)",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.copy_rounded, color: Colors.white70, size: 20),
+                              tooltip: "Salin Semua Log",
+                              onPressed: () {
+                                Clipboard.setData(ClipboardData(text: fullTextLog));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: const Text("Semua log debug berhasil disalin!"),
+                                    behavior: SnackBarBehavior.floating,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                );
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
+                              tooltip: "Hapus Log",
+                              onPressed: () {
+                                finance.clearDebugLogs();
+                                setModalState(() {});
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        // Search bar
+                        TextField(
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                          onChanged: (val) {
+                            setModalState(() => searchQuery = val);
+                          },
+                          decoration: InputDecoration(
+                            hintText: "Cari log / query...",
+                            hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                            prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38, size: 18),
+                            filled: true,
+                            fillColor: Colors.white.withOpacity(0.08),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide.none,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Log list view
+                  Expanded(
+                    child: filtered.isEmpty
+                        ? const Center(
+                            child: Text(
+                              "Belum ada log debug tercatat.",
+                              style: TextStyle(color: Colors.white38, fontStyle: FontStyle.italic),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.all(12),
+                            itemCount: filtered.length,
+                            itemBuilder: (_, i) {
+                              final item = filtered[i];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.04),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.white12),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: SelectableText(
+                                        item,
+                                        style: const TextStyle(
+                                          color: Color(0xFF00FF66),
+                                          fontSize: 11,
+                                          fontFamily: "monospace",
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    InkWell(
+                                      onTap: () {
+                                        Clipboard.setData(ClipboardData(text: item));
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: const Text("Log disalin!"),
+                                            duration: const Duration(seconds: 1),
+                                            behavior: SnackBarBehavior.floating,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                          ),
+                                        );
+                                      },
+                                      child: const Padding(
+                                        padding: EdgeInsets.all(4.0),
+                                        child: Icon(Icons.copy_rounded, color: Colors.white54, size: 14),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
