@@ -128,7 +128,8 @@ def detect_intent_node(state: AgentState) -> Dict[str, Any]:
                     "- Jika pesan berupa sapaan, percakapan umum, atau query yang sudah jelas maksudnya, berikan confidence_score = 1.0 dan is_ambiguous = false."
                 ))
             ]
-            for msg in state["messages"]:
+            recent_messages = state["messages"][-6:] if len(state["messages"]) > 6 else state["messages"]
+            for msg in recent_messages:
                 if msg["role"] == "user":
                     chat_history.append(HumanMessage(content=msg["content"]))
                 else:
@@ -547,22 +548,50 @@ def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 "sql_query": sql_query
             }
             extracted_data["query_result"] = query_result_payload
-            extracted_data["sql_query"] = sql_query
+            # Calculate exact total sum in Python to prevent LLM calculation errors
+            calculated_total_sum = 0
+            for r in formatted_results:
+                row_amt = r.get("total_harga") or r.get("total_amount") or r.get("amount") or r.get("total")
+                if row_amt is None and "harga_satuan" in r:
+                    price = r.get("harga_satuan") or 0
+                    qty = r.get("jumlah") or r.get("quantity") or 1
+                    row_amt = price * qty
+                if isinstance(row_amt, (int, float)):
+                    calculated_total_sum += int(row_amt)
+
+            formatted_total_str = f"Rp {calculated_total_sum:,}".replace(',', '.')
 
             if not formatted_results:
                 response_msg = "Tidak ditemukan data transaksi yang sesuai dengan pertanyaan Anda."
             else:
+                total_count = len(formatted_results)
+                # Extract ONLY essential item names as clean simple strings (max 4)
+                sample_item_names = [
+                    str(r.get("item") or r.get("note") or "Item").strip()
+                    for r in formatted_results[:4]
+                    if (r.get("item") or r.get("note"))
+                ]
+                sample_names_str = ", ".join(sample_item_names) if sample_item_names else "transaksi harian"
+
                 if llm:
-                    prompt = (
-                        f"Pertanyaan Pengguna: '{last_message}'\n"
-                        f"Data Database Hasil Query: {formatted_results}\n\n"
-                        f"Tugas Anda: Jawab pertanyaan pengguna secara ringkas, ramah, dan alami dalam bahasa Indonesia berdasarkan data di atas. "
-                        f"Format nominal uang dengan format Rp (Rupiah) jika ada."
-                    )
-                    llm_response = llm.invoke(prompt)
-                    response_msg = llm_response.content
+                    try:
+                        # Ultra-compact essential payload (~60 tokens max)
+                        prompt = (
+                            f"Pertanyaan Pengguna: '{last_message}'\n"
+                            f"Jumlah Transaksi: {total_count} entri\n"
+                            f"Total Nominal Keseluruhan: {formatted_total_str}\n"
+                            f"Contoh Item: {sample_names_str}\n\n"
+                            f"Tugas Anda: Jawab pertanyaan pengguna secara ringkas, ramah, dan alami dalam bahasa Indonesia (1-2 kalimat saja).\n"
+                            f"PENTING: Sebutkan secara eksplisit Total Nominal Keseluruhan ({formatted_total_str}) dalam kalimat jawaban Anda."
+                        )
+                        llm_response = llm.invoke(prompt)
+                        response_msg = llm_response.content
+                    except Exception as llm_err:
+                        logging.warning(f"LLM invoke failed (fallback used): {llm_err}")
+                        current_logs.append(f"[Analyst Agent] Hambatan LLM terdeteksi ({llm_err}). Menggunakan balasan fallback presisi.")
+                        response_msg = f"Pengeluaran Anda berdasarkan {total_count} data transaksi yang ditemukan mencapai total {formatted_total_str}."
                 else:
-                    response_msg = f"Hasil analisis data: {formatted_results}"
+                    response_msg = f"Pengeluaran Anda berdasarkan {total_count} data transaksi yang ditemukan mencapai total {formatted_total_str}."
         except Exception as e:
             logging.error(f"Error executing database query: {e}")
             current_logs.append(f"[Analyst Agent] Gagal mengeksekusi SQL query: {e}")
