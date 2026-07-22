@@ -474,16 +474,22 @@ def _internal_tool_executor(state: AgentState) -> Dict[str, Any]:
             current_logs.append(f"[Entry Agent] Sukses menyimpan transaksi (ID: {tx.id}) ke database.")
             items_str = ", ".join([f"{di.note} (x{di.quantity}): Rp {di.amount}" for di in tx.items])
             confidence_pct = int(confidence_score * 100)
-            if llm:
-                prompt = (
-                    f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
-                    f"Aksi Database: Berhasil mencatat transaksi {tx_type.lower()} (pemasukan/pengeluaran) senilai Rp {tx.amount} dengan metode pembayaran {tx.payment_method}. Detail item: {items_str}.\n\n"
-                    f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa transaksinya sudah berhasil dicatat."
-                )
-                llm_response = llm.invoke(prompt)
-                response_msg = f"{llm_response.content} (Confidence: {confidence_pct}%)"
-            else:
-                response_msg = f"Berhasil mencatat {tx_type.lower()} untuk detail: [{items_str}] dengan total Rp {tx.amount} ({tx.payment_method}). (Confidence: {confidence_pct}%)"
+            response_msg = f"Berhasil mencatat {tx_type.lower()} untuk detail: [{items_str}] dengan total Rp {tx.amount} ({tx.payment_method}). (Confidence: {confidence_pct}%)"
+            if settings.GROQ_API_KEY:
+                for model_name in GROQ_MODELS:
+                    try:
+                        chat_llm = ChatGroq(model=model_name, api_key=settings.GROQ_API_KEY, temperature=0.3)
+                        prompt = (
+                            f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                            f"Aksi Database: Berhasil mencatat transaksi {tx_type.lower()} (pemasukan/pengeluaran) senilai Rp {tx.amount} dengan metode pembayaran {tx.payment_method}. Detail item: {items_str}.\n\n"
+                            f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa transaksinya sudah berhasil dicatat. PENTING: Panggil 'Sir' dan akhiri dengan ', Sir.'."
+                        )
+                        llm_response = chat_llm.invoke(prompt)
+                        response_msg = f"{llm_response.content} (Confidence: {confidence_pct}%)"
+                        break
+                    except Exception as e:
+                        logging.warning(f"Groq model '{model_name}' failed in response gen: {e}")
+                        continue
         except Exception as e:
             db.rollback()
             current_logs.append(f"[Entry Agent] Error penyimpanan database: {e}")
@@ -532,16 +538,22 @@ def _internal_tool_executor(state: AgentState) -> Dict[str, Any]:
             
             current_logs.append(f"[Entry Agent] Ditambahkan item baru. Total transaksi diupdate menjadi Rp {last_tx.amount}.")
             added_items_str = ", ".join(added_items_str_list)
-            if llm:
-                prompt = (
-                    f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
-                    f"Aksi Database: Berhasil menambahkan item: [{added_items_str}] senilai total tambahan Rp {total_added} ke transaksi '{last_tx.note}' (ID: {last_tx.id}). Total nominal baru transaksi sekarang adalah Rp {last_tx.amount}.\n\n"
-                    f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa item belanjaan tambahan tersebut sudah berhasil ditambahkan ke transaksi terakhir mereka."
-                )
-                llm_response = llm.invoke(prompt)
-                response_msg = llm_response.content
-            else:
-                response_msg = f"Berhasil menambahkan [{added_items_str}] ke transaksi terakhir. Total transaksi sekarang: Rp {last_tx.amount}."
+            response_msg = f"Berhasil menambahkan [{added_items_str}] ke transaksi terakhir. Total transaksi sekarang: Rp {last_tx.amount}."
+            if settings.GROQ_API_KEY:
+                for model_name in GROQ_MODELS:
+                    try:
+                        chat_llm = ChatGroq(model=model_name, api_key=settings.GROQ_API_KEY, temperature=0.3)
+                        prompt = (
+                            f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                            f"Aksi Database: Berhasil menambahkan item: [{added_items_str}] senilai total tambahan Rp {total_added} ke transaksi '{last_tx.note}' (ID: {last_tx.id}). Total nominal baru transaksi sekarang adalah Rp {last_tx.amount}.\n\n"
+                            f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa item belanjaan tambahan tersebut sudah berhasil ditambahkan ke transaksi terakhir mereka. PENTING: Panggil 'Sir' dan akhiri dengan ', Sir.'."
+                        )
+                        llm_response = chat_llm.invoke(prompt)
+                        response_msg = llm_response.content
+                        break
+                    except Exception as e:
+                        logging.warning(f"Groq model '{model_name}' failed in APPEND_ITEM gen: {e}")
+                        continue
         except Exception as e:
             db.rollback()
             current_logs.append(f"[Entry Agent] Error saat menambahkan item ke DB: {e}")
@@ -576,16 +588,22 @@ def _internal_tool_executor(state: AgentState) -> Dict[str, Any]:
                     db.refresh(last_tx)
                     
                     current_logs.append(f"[Entry Agent] Berhasil mengupdate nominal transaksi dari Rp {old_amount} menjadi Rp {new_amount}.")
-                    if llm:
-                        prompt = (
-                            f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
-                            f"Aksi Database: Berhasil merevisi nominal transaksi terakhir '{last_tx.note}' dari Rp {old_amount} menjadi Rp {new_amount}.\n\n"
-                            f"Tugas Anda: Beritahu pengguna dengan ramah dan alami dalam bahasa Indonesia bahwa perubahan nominal transaksi terakhir tersebut sudah berhasil disimpan."
-                        )
-                        llm_response = llm.invoke(prompt)
-                        response_msg = llm_response.content
-                    else:
-                        response_msg = f"Berhasil mengubah nominal transaksi terakhir menjadi Rp {new_amount}."
+                    response_msg = f"Berhasil mengubah nominal transaksi terakhir menjadi Rp {new_amount}."
+                    if settings.GROQ_API_KEY:
+                        for model_name in GROQ_MODELS:
+                            try:
+                                chat_llm = ChatGroq(model=model_name, api_key=settings.GROQ_API_KEY, temperature=0.3)
+                                prompt = (
+                                    f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                                    f"Aksi Database: Berhasil merevisi nominal transaksi terakhir '{last_tx.note}' dari Rp {old_amount} menjadi Rp {new_amount}.\n\n"
+                                    f"Tugas Anda: Beritahu pengguna dengan ramah dan alami dalam bahasa Indonesia bahwa perubahan nominal transaksi terakhir tersebut sudah berhasil disimpan. PENTING: Panggil 'Sir' dan akhiri dengan ', Sir.'."
+                                )
+                                llm_response = chat_llm.invoke(prompt)
+                                response_msg = llm_response.content
+                                break
+                            except Exception as e:
+                                logging.warning(f"Groq model '{model_name}' failed in MODIFY_LAST gen: {e}")
+                                continue
                 else:
                     current_logs.append("[Entry Agent] Gagal merevisi: nominal harga baru 0 atau kurang.")
                     response_msg = "Maaf, nominal harga baru tidak valid atau tidak terbaca."
@@ -617,25 +635,24 @@ def _internal_tool_executor(state: AgentState) -> Dict[str, Any]:
                 
                 current_logs.append(f"[Entry Agent] Berhasil menghapus transaksi ID: {last_tx.id} ('{note_to_del}') sebesar Rp {amount_to_del}.")
                 response_msg = f"Berhasil membatalkan (menghapus) transaksi {type_to_del} terakhir untuk '{note_to_del}' sebesar Rp {amount_to_del}."
-                if llm:
-                    prompt = (
-                        f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
-                        f"Aksi Database: Berhasil membatalkan/menghapus transaksi {type_to_del} terakhir untuk '{note_to_del}' sebesar Rp {amount_to_del}.\n\n"
-                        f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa transaksi tersebut sudah berhasil dibatalkan."
-                    )
-                    llm_response = llm.invoke(prompt)
-                    response_msg = llm_response.content
+                if settings.GROQ_API_KEY:
+                    for model_name in GROQ_MODELS:
+                        try:
+                            chat_llm = ChatGroq(model=model_name, api_key=settings.GROQ_API_KEY, temperature=0.3)
+                            prompt = (
+                                f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
+                                f"Aksi Database: Berhasil membatalkan/menghapus transaksi {type_to_del} terakhir untuk '{note_to_del}' sebesar Rp {amount_to_del}.\n\n"
+                                f"Tugas Anda: Beritahu pengguna dengan ramah, santai, dan alami dalam bahasa Indonesia bahwa transaksi tersebut sudah berhasil dibatalkan. PENTING: Panggil 'Sir' dan akhiri dengan ', Sir.'."
+                            )
+                            llm_response = chat_llm.invoke(prompt)
+                            response_msg = llm_response.content
+                            break
+                        except Exception as e:
+                            logging.warning(f"Groq model '{model_name}' failed in UNDO gen: {e}")
+                            continue
             else:
                 current_logs.append("[Context Agent] Gagal: Tidak ada transaksi terakhir ditemukan untuk dibatalkan.")
                 response_msg = "Tidak ditemukan transaksi terakhir untuk dibatalkan."
-                if llm:
-                    prompt = (
-                        f"Pertanyaan/Perintah Pengguna: '{last_message}'\n"
-                        f"Aksi Database: Tidak ada transaksi terakhir yang ditemukan untuk dibatalkan.\n\n"
-                        f"Tugas Anda: Beritahu pengguna secara ramah dan sopan dalam bahasa Indonesia bahwa tidak ada transaksi terakhir yang ditemukan untuk dibatalkan."
-                    )
-                    llm_response = llm.invoke(prompt)
-                    response_msg = llm_response.content
         except Exception as e:
             db.rollback()
             current_logs.append(f"[Entry Agent] Error database undo: {e}")
@@ -764,25 +781,25 @@ def _internal_tool_executor(state: AgentState) -> Dict[str, Any]:
                 ]
                 sample_names_str = ", ".join(sample_item_names) if sample_item_names else "transaksi harian"
 
-                if llm:
-                    try:
-                        # Ultra-compact essential payload (~60 tokens max)
-                        prompt = (
-                            f"Pertanyaan Pengguna: '{last_message}'\n"
-                            f"Jumlah Transaksi: {total_count} entri\n"
-                            f"Total Nominal Keseluruhan: {formatted_total_str}\n"
-                            f"Contoh Item: {sample_names_str}\n\n"
-                            f"Tugas Anda: Jawab pertanyaan pengguna secara ringkas, ramah, dan alami dalam bahasa Indonesia (1-2 kalimat saja).\n"
-                            f"PENTING: Sebutkan secara eksplisit Total Nominal Keseluruhan ({formatted_total_str}) dalam kalimat jawaban Anda."
-                        )
-                        llm_response = llm.invoke(prompt)
-                        response_msg = llm_response.content
-                    except Exception as llm_err:
-                        logging.warning(f"LLM invoke failed (fallback used): {llm_err}")
-                        current_logs.append(f"[Analyst Agent] Hambatan LLM terdeteksi ({llm_err}). Menggunakan balasan fallback presisi.")
-                        response_msg = f"Pengeluaran Anda berdasarkan {total_count} data transaksi yang ditemukan mencapai total {formatted_total_str}."
-                else:
-                    response_msg = f"Pengeluaran Anda berdasarkan {total_count} data transaksi yang ditemukan mencapai total {formatted_total_str}."
+                response_msg = f"Pengeluaran Anda berdasarkan {total_count} data transaksi yang ditemukan mencapai total {formatted_total_str}."
+                if settings.GROQ_API_KEY:
+                    for model_name in GROQ_MODELS:
+                        try:
+                            chat_llm = ChatGroq(model=model_name, api_key=settings.GROQ_API_KEY, temperature=0.3)
+                            prompt = (
+                                f"Pertanyaan Pengguna: '{last_message}'\n"
+                                f"Jumlah Transaksi: {total_count} entri\n"
+                                f"Total Nominal Keseluruhan: {formatted_total_str}\n"
+                                f"Contoh Item: {sample_names_str}\n\n"
+                                f"Tugas Anda: Jawab pertanyaan pengguna secara ringkas, ramah, dan alami dalam bahasa Indonesia (1-2 kalimat saja).\n"
+                                f"PENTING: Sebutkan secara eksplisit Total Nominal Keseluruhan ({formatted_total_str}) dalam kalimat jawaban Anda. Akhiri dengan ', Sir.'."
+                            )
+                            llm_response = chat_llm.invoke(prompt)
+                            response_msg = llm_response.content
+                            break
+                        except Exception as llm_err:
+                            logging.warning(f"Analyst Groq model '{model_name}' failed: {llm_err}")
+                            continue
         except Exception as e:
             logging.error(f"Error executing database query: {e}")
             current_logs.append(f"[Analyst Agent] Gagal mengeksekusi SQL query: {e}")

@@ -5,7 +5,9 @@ import re
 import logging
 from app.database.session import SessionLocal
 from app.models.models import Transaction, TransactionItem
-from app.graphs.finance_graph import llm, TransactionExtraction, TransactionItemExtraction
+from app.core.config import settings
+from langchain_groq import ChatGroq
+from app.graphs.finance_graph import GROQ_MODELS, invoke_llm_with_fallback, TransactionExtraction, TransactionItemExtraction
 from langchain_core.messages import SystemMessage, HumanMessage
 
 router = APIRouter(prefix="/agent", tags=["Agent Simulators"])
@@ -27,50 +29,45 @@ async def simulate_entry_agent(payload: AgentSimulationRequest):
     logs = ["[Entry Agent Simulator] Menerima teks masukan pencatatan."]
     last_message = payload.message
     
-    if llm:
-        try:
-            logs.append("[Entry Agent Simulator] Menghubungi model Llama-3.3 untuk ekstraksi terstruktur...")
-            chat_history = [
-                SystemMessage(content=(
-                    "Anda adalah Entry Agent spesialis pencatatan keuangan.\n"
-                    "Ekstrak intent, category, payment_method, type, items, confidence_score, is_ambiguous, dan clarification_question.\n"
-                    "Gunakan aturan: jika nominal/barang tidak jelas atau hilang, set is_ambiguous=True, confidence_score < 0.8, dan tulis clarification_question."
-                )),
-                HumanMessage(content=last_message)
-            ]
-            structured_llm = llm.with_structured_output(TransactionExtraction)
-            extracted = structured_llm.invoke(chat_history)
+    chat_history = [
+        SystemMessage(content=(
+            "Anda adalah Entry Agent spesialis pencatatan keuangan.\n"
+            "Ekstrak intent, category, payment_method, type, items, confidence_score, is_ambiguous, dan clarification_question.\n"
+            "Gunakan aturan: jika nominal/barang tidak jelas atau hilang, set is_ambiguous=True, confidence_score < 0.8, dan tulis clarification_question."
+        )),
+        HumanMessage(content=last_message)
+    ]
+    
+    extracted = invoke_llm_with_fallback(chat_history, TransactionExtraction, logs)
+    if extracted:
+        items_list = []
+        for item in (extracted.items or []):
+            items_list.append({
+                "note": item.note,
+                "amount": item.amount if item.amount is not None else 0,
+                "quantity": item.quantity
+            })
             
-            items_list = []
-            for item in (extracted.items or []):
-                items_list.append({
-                    "note": item.note,
-                    "amount": item.amount if item.amount is not None else 0,
-                    "quantity": item.quantity
-                })
-                
-            conf = extracted.confidence_score if extracted.confidence_score is not None else 1.0
-            logs.append(f"[Entry Agent Simulator] Ekstraksi sukses (Confidence: {int(conf * 100)}%).")
-            if extracted.is_ambiguous:
-                logs.append(f"[Entry Agent Simulator] Informasi kurang lengkap! Menyiapkan klarifikasi: \"{extracted.clarification_question}\"")
-            else:
-                logs.append(f"[Entry Agent Simulator] Informasi lengkap. Siap disimpan ke database.")
-                
-            return EntrySimulationResponse(
-                extracted_data={
-                    "category": extracted.category or "Other",
-                    "payment_method": extracted.payment_method or "tunai",
-                    "type": extracted.type or "OUT",
-                    "items": items_list,
-                    "sql_query": extracted.sql_query
-                },
-                confidence_score=conf,
-                is_ambiguous=extracted.is_ambiguous or False,
-                clarification_question=extracted.clarification_question,
-                logs=logs
-            )
-        except Exception as e:
-            logs.append(f"[Entry Agent Simulator] Error LLM: {e}. Mengaktifkan fallback rule-based.")
+        conf = extracted.confidence_score if extracted.confidence_score is not None else 1.0
+        logs.append(f"[Entry Agent Simulator] Ekstraksi sukses (Confidence: {int(conf * 100)}%).")
+        if extracted.is_ambiguous:
+            logs.append(f"[Entry Agent Simulator] Informasi kurang lengkap! Menyiapkan klarifikasi: \"{extracted.clarification_question}\"")
+        else:
+            logs.append(f"[Entry Agent Simulator] Informasi lengkap. Siap disimpan ke database.")
+            
+        return EntrySimulationResponse(
+            extracted_data={
+                "category": extracted.category or "Other",
+                "payment_method": extracted.payment_method or "tunai",
+                "type": extracted.type or "OUT",
+                "items": items_list,
+                "sql_query": extracted.sql_query
+            },
+            confidence_score=conf,
+            is_ambiguous=extracted.is_ambiguous if extracted.is_ambiguous is not None else False,
+            clarification_question=extracted.clarification_question,
+            logs=logs
+        )
     
     # Fallback
     amount = 0
@@ -121,53 +118,51 @@ async def simulate_analyst_agent(payload: AgentSimulationRequest):
     sql_query = ""
     results = []
     
-    if llm:
-        try:
-            logs.append("[Analyst Agent Simulator] Meminta Llama-3.3 menyusun kueri SQL SELECT PostgreSQL...")
-            import datetime
-            current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            chat_history = [
-                SystemMessage(content=(
-                    "Anda adalah Database Analyst Agent.\n"
-                    f"Waktu Sekarang: {current_time_str} (PENTING: Gunakan ini sebagai acuan tahun/tanggal saat ini saat menganalisis kueri waktu pengguna seperti 'bulan juni', 'minggu lalu', dsb. Selalu asumsikan tahun saat ini sesuai tahun sekarang kecuali pengguna menyebutkan tahun lain secara spesifik).\n"
-                    "Tugas Anda HANYA menghasilkan query SQL SELECT PostgreSQL yang valid untuk tabel 'transactions' (t) dan 'transaction_items' (ti).\n"
-                    "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
-                    "Gunakan parameter ':user_id' untuk memfilter kepemilikan data.\n"
-                    "PENTING: Untuk filter waktu/tanggal, gunakan PostgreSQL date functions berikut agar sangat akurat:\n"
-                    "  - Harian (hari ini): `created_at::date = CURRENT_DATE` atau group by `created_at::date`\n"
-                    "  - Mingguan (minggu ini): `created_at >= DATE_TRUNC('week', CURRENT_DATE)` atau group by `DATE_TRUNC('week', created_at)`\n"
-                    "  - Bulanan (bulan ini): `created_at >= DATE_TRUNC('month', CURRENT_DATE)` atau group by `DATE_TRUNC('month', created_at)`\n"
-                    "  - PENTING: Jika membandingkan created_at dengan string tanggal statis (misal '2024-06-01'), Anda HARUS melakukan type cast secara eksplisit seperti `'2024-06-01'::timestamp` atau `'2024-06-01'::date` (misal: `DATE_TRUNC('month', '2024-06-01'::timestamp)`), karena tanpa cast PostgreSQL akan menghasilkan error 'date_trunc(unknown, unknown) is not unique'.\n"
-                    "  - Pastikan filter pengeluaran menggunakan `type = 'OUT'` dan pemasukan menggunakan `type = 'IN'`.\n"
-                    "Kembalikan HANYA query SELECT sql mentah di output, tanpa markdown, tanpa penjelasan."
-                )),
-                HumanMessage(content=payload.message)
-            ]
-            response = llm.invoke(chat_history)
-            sql_query = response.content.replace("```sql", "").replace("```", "").strip()
-            logs.append(f"[Analyst Agent Simulator] Query dihasilkan: \"{sql_query}\".")
-            
-            # Validation
-            normalized_sql = sql_query.upper()
-            if not normalized_sql.startswith("SELECT"):
-                logs.append("[Analyst Agent Simulator] Validasi gagal: Query harus berupa SELECT.")
-                sql_query = "SELECT 'Akses ditolak: Hanya SELECT yang diizinkan';"
-            else:
-                db = SessionLocal()
-                try:
-                    from sqlalchemy import text
-                    logs.append("[Analyst Agent Simulator] Mengeksekusi SQL query di database lokal...")
-                    db_result = db.execute(text(sql_query), {"user_id": payload.user_id})
-                    rows = db_result.fetchall()
-                    columns = db_result.keys()
-                    results = [dict(zip(columns, row)) for row in rows]
-                    logs.append(f"[Analyst Agent Simulator] Eksekusi berhasil. Mendapatkan {len(results)} entri.")
-                except Exception as db_err:
-                    logs.append(f"[Analyst Agent Simulator] Error eksekusi DB: {db_err}")
-                finally:
-                    db.close()
-        except Exception as e:
-            logs.append(f"[Analyst Agent Simulator] Error model: {e}")
+    if settings.GROQ_API_KEY:
+        for model_name in GROQ_MODELS:
+            try:
+                logs.append(f"[Analyst Agent Simulator] Meminta model '{model_name}' menyusun kueri SQL...")
+                import datetime
+                current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                chat_history = [
+                    SystemMessage(content=(
+                        "Anda adalah Database Analyst Agent.\n"
+                        f"Waktu Sekarang: {current_time_str} (PENTING: Gunakan ini sebagai acuan tahun/tanggal saat ini saat menganalisis kueri waktu pengguna seperti 'bulan juni', 'minggu lalu', dsb. Selalu asumsikan tahun saat ini sesuai tahun sekarang kecuali pengguna menyebutkan tahun lain secara spesifik).\n"
+                        "Tugas Anda HANYA menghasilkan query SQL SELECT PostgreSQL yang valid untuk tabel 'transactions' (t) dan 'transaction_items' (ti).\n"
+                        "Kolom tabel 'transactions' adalah: id, user_id, amount, note, type ('IN'/'OUT'), category, payment_method, created_at.\n"
+                        "Gunakan parameter ':user_id' untuk memfilter kepemilikan data.\n"
+                        "Kembalikan HANYA query SELECT sql mentah di output, tanpa markdown, tanpa penjelasan."
+                    )),
+                    HumanMessage(content=payload.message)
+                ]
+                chat_llm = ChatGroq(model=model_name, api_key=settings.GROQ_API_KEY, temperature=0.0)
+                response = chat_llm.invoke(chat_history)
+                sql_query = response.content.replace("```sql", "").replace("```", "").strip()
+                logs.append(f"[Analyst Agent Simulator] Query dihasilkan: \"{sql_query}\".")
+                
+                # Validation
+                normalized_sql = sql_query.upper()
+                if not normalized_sql.startswith("SELECT"):
+                    logs.append("[Analyst Agent Simulator] Validasi gagal: Query harus berupa SELECT.")
+                    sql_query = "SELECT 'Akses ditolak: Hanya SELECT yang diizinkan';"
+                else:
+                    db = SessionLocal()
+                    try:
+                        from sqlalchemy import text
+                        logs.append("[Analyst Agent Simulator] Mengeksekusi SQL query di database lokal...")
+                        db_result = db.execute(text(sql_query), {"user_id": payload.user_id})
+                        rows = db_result.fetchall()
+                        columns = db_result.keys()
+                        results = [dict(zip(columns, row)) for row in rows]
+                        logs.append(f"[Analyst Agent Simulator] Eksekusi berhasil. Mendapatkan {len(results)} entri.")
+                    except Exception as db_err:
+                        logs.append(f"[Analyst Agent Simulator] Error eksekusi DB: {db_err}")
+                    finally:
+                        db.close()
+                break
+            except Exception as e:
+                logs.append(f"[Analyst Agent Simulator] Error model '{model_name}': {e}")
+                continue
             
     if not sql_query:
         sql_query = "SELECT 'LLM tidak tersedia' as info;"
@@ -250,22 +245,26 @@ async def simulate_search_agent(payload: AgentSimulationRequest):
     logs = [f"[Web Search Agent Simulator] Menerima kueri pencarian pasar: \"{payload.message}\"."]
     search_results = []
     
-    if llm:
-        try:
-            logs.append("[Web Search Agent Simulator] Menghubungi Llama-3.3 untuk mensimulasikan pencarian web...")
-            prompt = (
-                f"Simulasikan hasil pencarian google real-time untuk kueri: '{payload.message}'.\n"
-                f"Tuliskan 3 hasil pencarian yang relevan beserta estimasi harganya saat ini dalam format JSON array yang memuat kunci: title, snippet, price."
-            )
-            response = llm.invoke(prompt)
-            # Parse list from response
-            import json
-            match = re.search(r'\[\s*\{.*\}\s*\]', response.content, re.DOTALL)
-            if match:
-                search_results = json.loads(match.group(0))
-                logs.append(f"[Web Search Agent Simulator] Berhasil mensimulasikan {len(search_results)} hasil pencarian.")
-        except Exception as e:
-            logs.append(f"[Web Search Agent Simulator] Gagal mensimulasikan LLM search: {e}")
+    if settings.GROQ_API_KEY:
+        for model_name in GROQ_MODELS:
+            try:
+                logs.append(f"[Web Search Agent Simulator] Menghubungi model '{model_name}' untuk pencarian...")
+                prompt = (
+                    f"Simulasikan hasil pencarian google real-time untuk kueri: '{payload.message}'.\n"
+                    f"Tuliskan 3 hasil pencarian yang relevan beserta estimasi harganya saat ini dalam format JSON array yang memuat kunci: title, snippet, price."
+                )
+                chat_llm = ChatGroq(model=model_name, api_key=settings.GROQ_API_KEY, temperature=0.3)
+                response = chat_llm.invoke(prompt)
+                # Parse list from response
+                import json
+                match = re.search(r'\[\s*\{.*\}\s*\]', response.content, re.DOTALL)
+                if match:
+                    search_results = json.loads(match.group(0))
+                    logs.append(f"[Web Search Agent Simulator] Berhasil mensimulasikan {len(search_results)} hasil pencarian.")
+                break
+            except Exception as e:
+                logs.append(f"[Web Search Agent Simulator] Gagal model '{model_name}': {e}")
+                continue
             
     if not search_results:
         # Static mock fallback
